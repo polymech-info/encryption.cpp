@@ -533,9 +533,12 @@ Error SecureChannel::open(std::span<const std::uint8_t> frame,
     if (pos > frame.size() || frame.size() - pos != cipher_size)
         return Error::make(ErrorCode::InvalidFrame, "encrypted frame size does not match its header");
 
-    if (rx_initialized_ && sequence <= rx_highest_) {
+    if (!rx_initialized_) {
+        if (sequence != k_first_sequence)
+            return Error::make(ErrorCode::Stale, "encrypted frame arrived before sequence 0");
+    } else if (sequence <= rx_highest_) {
         const std::uint64_t delta = rx_highest_ - sequence;
-        if (delta >= 64)
+        if (delta >= static_cast<std::uint64_t>(k_replay_window))
             return Error::make(ErrorCode::Stale, "encrypted frame is outside the replay window");
         if ((rx_bitmap_ & (std::uint64_t{1} << delta)) != 0)
             return Error::make(ErrorCode::Replay, "encrypted frame was already accepted");
@@ -561,7 +564,9 @@ Error SecureChannel::open(std::span<const std::uint8_t> frame,
         rx_bitmap_ = 1;
     } else if (sequence > rx_highest_) {
         const std::uint64_t shift = sequence - rx_highest_;
-        rx_bitmap_ = shift >= 64 ? 1 : ((rx_bitmap_ << shift) | 1);
+        rx_bitmap_ = shift >= static_cast<std::uint64_t>(k_replay_window)
+            ? 1
+            : ((rx_bitmap_ << shift) | 1);
         rx_highest_ = sequence;
     } else {
         rx_bitmap_ |= std::uint64_t{1} << (rx_highest_ - sequence);

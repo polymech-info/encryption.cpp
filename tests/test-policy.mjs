@@ -16,7 +16,7 @@ function check(condition, label, detail = '') {
 const capabilities = run(['capabilities']);
 check(capabilities.status === 0, 'capabilities exits 0', capabilities.stderr);
 check(capabilities.json?.policies?.live_session === true, 'live session policy is enabled');
-check(capabilities.json?.policies?.signal === false, 'signal session policy stays disabled');
+check(capabilities.json?.policies?.signal === true, 'signal session policy is enabled');
 check(capabilities.json?.policies?.mls === false, 'mls session policy stays disabled');
 
 const list = run(['policy', 'list']);
@@ -25,8 +25,8 @@ check(list.status === 0 && list.json?.schema === 'pm.encryption.policy.v1',
 const listed = new Map((list.json?.policies || []).map((row) => [row.id, row]));
 check(listed.get('live_session')?.enabled === true && listed.get('live_session')?.level === 'low',
   'live session is listed as the low-level policy');
-check(listed.get('signal')?.enabled === false && listed.get('signal')?.level === 'session',
-  'signal is listed as a disabled session policy');
+check(listed.get('signal')?.enabled === true && listed.get('signal')?.level === 'session',
+  'signal is listed as the session policy');
 
 const live = run(['policy', 'live']);
 check(live.status === 0, 'live policy suite exits 0', live.stdout || live.stderr);
@@ -37,8 +37,11 @@ check(live.json?.ok === true && live.json?.failed === 0 && live.json?.passed >= 
 check(!live.stdout.includes('http://'), 'live policy suite does not open the chat harness');
 
 const signal = run(['policy', 'signal']);
-check(signal.status === 1 && signal.json?.code === 'feature_disabled',
-  'signal policy refuses while its feature is off', signal.stdout || signal.stderr);
+check(signal.status === 0 && signal.json?.schema === 'pm.signal.room.v1',
+  'signal policy runs the text room', signal.stdout || signal.stderr);
+check(signal.json?.ok === true && signal.json?.session === 'pqxdh-triple-ratchet',
+  'signal room uses upstream PQXDH and the Triple Ratchet', signal.stdout);
+check(!signal.stdout.includes('signal-room'), 'signal policy output does not contain the text');
 
 const unknown = run(['policy', 'unknown']);
 check(unknown.status === 1 && unknown.json?.code === 'unknown_policy',

@@ -2,9 +2,16 @@
 
 **Date:** 2026-11-16  
 **Scope:** `packages/encryption.cpp` as built on Windows: `live_session`, the
-HTTP/SSE harness, and `scenario group-file` through `packages/vfs.cpp`.  
-**Out of scope:** Tanit, a broker, P2P, libsignal, MLS, Android, Linux. Those
-are not implemented here, so this document does not grade them.
+HTTP/SSE harness, `scenario group-file` through `packages/vfs.cpp`, and the
+in-process `pm::room` broker.  
+**Out of scope:** Tanit, a listening broker, tailnet, P2P, MLS, Android,
+Linux, and a review of libsignal itself. The dev preset runs an in-memory
+text room through the adapter. This document does not grade PQXDH, the
+Triple Ratchet, Sesame, or session persistence.
+
+The same-day pass below closed the items a test in this package can lock.
+SA-15, SA-16, and SA-17 stay open. The byte model for SA-15 is
+`docs/protocol-model.md`. The known answers are `tests/vectors/kat.v1.json`.
 
 This is an internal reading of our own code. It is not an independent audit.
 Trail of Bits runs a cryptographic assessment in five stages: scope and
@@ -49,9 +56,11 @@ claims a desktop harness is allowed to repeat.
   (`pm.encryption.channel.i2r.v1` and `r2i.v1`).
 - Frames are XChaCha20-Poly1305 with a random 24-byte nonce. The AAD covers
   the header and the channel context. A failed open does not move the replay
-  window. The window is 64 frames after the first accepted sequence.
-- Identity secrets, ephemeral secrets, channel keys, and file content keys
-  are wiped in their owning types. `FileSnapshot` is not one of those types.
+  window. The first accepted sequence is 0. A higher sequence before that
+  does not move the window. After 0, the window is 64 frames.
+- Identity secrets, ephemeral secrets, channel keys, file content keys, and
+  `FileSnapshot` plaintext are wiped in their owning types. The file content
+  key is sealed to a separate X25519 `FileKey`, not to the Ed25519 identity.
 - A file is encrypted once. The manifest is signed. The recipient-seal hash
   is inside the signature. Each seal is a `crypto_box` that opens only for
   that member and checks transfer id, room id, and recipient. Carol, in the
@@ -92,25 +101,26 @@ process exits.
 That is an acceptable description of an online test channel. It is not
 Signal, and it is not a production chat transcript.
 
-**Before a production chat claim:** either adopt a reviewed ratchet, or
-write the product limit in the user-facing surface and keep history out of
-this channel. The desktop harness only has to say it.
+**Resolution:** the library states the limit. `k_channel_ratchet` is false,
+capabilities report `history: out-of-channel`, and the selftest locks both.
+There is still no ratchet on this channel. The `signal` policy is a different
+session: the dev preset runs PQXDH and the Triple Ratchet through
+`packages/libsignal` for text only, in memory. A stolen live-channel key
+still reads that channel.
 
 ### SA-3 — The signing identity also decrypts files.
 
-`identity_curve_secret` converts the Ed25519 seed to X25519 and
-`crypto_box_easy` seals the content key to it. One long-term key both signs
-handshakes and opens every file sealed to that device. There is no forward
-secrecy for those files. Removing a room member does not erase a key they
-already opened.
+The first envelope converted the Ed25519 seed to X25519 and sealed the
+content key to it. One long-term key both signed handshakes and opened every
+file sealed to that device.
 
-libsodium supports this conversion. Using one key for both jobs is still the
-kind of composition an audit writes up, because a failure of either use
-lands on the same secret.
-
-**Before Tanit files:** a separate file key, wrapped or stored on its own.
-The desktop chat harness sends chat frames only. It does not seal
-attachments to the chat identity.
+**Resolution:** `FileKey` is a separate X25519 key. The Ed25519 identity
+signs the manifest. `crypto_box` seals the content key to the file key.
+Capabilities report `file_key: separate-x25519` and
+`file_key_is_identity: false`. The group-file scenario checks that the two
+public keys differ. There is still no forward secrecy for a file whose
+content key has been opened, and member removal still does not erase a
+ciphertext the recipient already holds (SA-12).
 
 ### SA-4 — The default build still speaks unauthenticated key agreement.
 
@@ -139,10 +149,12 @@ truncation, bad signature, wrong identity, corrupt chunk, replay. It does
 not search the space. Trail of Bits' fourth stage is a harness that fuzzes
 those parsers and replays malformed transcripts.
 
-**Before production:** fuzz `read_message`, `SecureChannel::open`, and
-`decode_file_offer`. Not a blocker for two local processes whose tests
-already treat each other as hostile, and a blocker before any of those
-parsers sees an unsandboxed network.
+**Resolution:** `pm-encryption fuzz` mutates handshake messages, channel
+frames, and file offers, then requires `read_message` on the signed
+messages, `SecureChannel::open`, and `decode_file_offer` plus `FileInbox::open`
+to reject them. `npm test` runs it. This is a fixed mutation pass, not a
+coverage-guided fuzzer. A coverage-guided run is still worth adding before
+an unsandboxed network, and it does not replace SA-15.
 
 ### SA-7 — The replay window anchors on whatever sequence arrives first.
 
@@ -155,9 +167,10 @@ a high sequence and make the earlier frames `stale`.
 That is availability, not a confidentiality break: forging the frame still
 requires the channel key.
 
-**Before P2P:** decide the rule, and test it. Likely: the first accepted
-sequence is 0, and a gap policy is explicit. Do not reuse the HTTP assumption
-on a datagram transport.
+**Resolution:** the first accepted sequence is 0. A higher sequence before
+that is `stale` and leaves the window where it was. After 0, a gap inside
+64 still opens, and a gap past 64 is `stale`. The selftest covers a high
+sequence arriving first, reordering after 0, and a jump past the window.
 
 ### SA-8 — The initiator finishes before the responder does.
 
@@ -183,36 +196,39 @@ as the frame AAD.
 
 ### SA-10 — VFS is the jail, not the membership check.
 
-`group-file` is right about the split: ciphertext on the room mount,
-plaintext under the recipient home, final name only after the hash check.
+`group-file` keeps ciphertext on the room mount and plaintext under the
+recipient home. The final name is written only after the hash check.
 Nothing in `vfs.cpp` stops another caller in the same process from reading
-the room mount. Staging pieces are plaintext in the home, and
-`FileSnapshot` does not wipe them. The scenario does not delete staging
-after publish.
+the room mount.
 
-**For any harness that keeps a disk:** delete staging after publish, wipe
-snapshot copies, and never write plaintext to the shared mount. Do not wait
-for `acl.cpp` to make the ciphertext secret.
+**Resolution:** `FileSnapshot` wipes plaintext in its destructor and after
+resume copies a piece into the inbox. The scenario deletes staging files
+after publish and reports `staging_deleted`. Plaintext still does not belong
+on the shared mount. `acl.cpp` is still not what makes the ciphertext secret.
 
 ### SA-11 — File nonces are safe only for one content key.
 
 The chunk nonce is transfer id, revision, and index. A second plaintext
 under the same content key at the same index is nonce reuse, which breaks
-XChaCha20-Poly1305. `create_file_offer` generates a new key and does not
-keep it, so the API we have does not do this. Nothing tests the invariant,
-and a later "re-encrypt this chunk" helper could.
+XChaCha20-Poly1305.
 
-**Before that API grows:** a test that two different plaintexts at the same
-index under one key are rejected, or impossible to ask for.
+**Resolution:** `create_file_offer` still mints a new key, encrypts each
+index once, and wipes the key before returning. `reseal_file_chunk` refuses
+the request and writes nothing. `FileInbox::accept` treats a different
+ciphertext at an accepted index as a replay. The group-file scenario locks
+both.
 
 ### SA-12 — A sealed file has no epoch.
 
 The recipient list is fixed at 32 members. A new manifest revision is a new
 offer only if the sender builds one. The previous ciphertext still opens
-with the previous content key. Member removal is not file revocation.
+with the previous content key.
 
-Say that in the product, or replace the envelope. Do not let a leave-room
-button imply the old attachment is unreadable.
+**Resolution:** the product surface says so. Capabilities report
+`removal_revokes_ciphertext: false`. The group-file scenario drops Dave from
+revision 2, Dave still holds the revision 1 plaintext, and Dave cannot open
+revision 2. A leave-room button must not claim the old attachment is
+unreadable.
 
 ### SA-13 — The HTTP harness will accept a 64 MiB frame.
 
@@ -224,19 +240,22 @@ desktop process with that cap is a memory exhaustion bug.
 
 ### SA-14 — Tests check themselves.
 
-The suites prove our encoder and our decoder agree. They do not publish the
-transcript bytes, the HKDF inputs, or a file blob that a second
-implementation can match. Interop and an auditor both need those vectors.
+The older suites prove our encoder and our decoder agree.
+
+**Resolution:** `pm-encryption vectors` prints the handshake messages, the
+transcript, the BLAKE2b salt, the HKDF info strings, one frame, and one file
+offer from fixed seeds. `tests/vectors/kat.v1.json` is that output.
+`npm test` fails if the bytes change. A second implementation can match the
+file without calling this encoder.
 
 ### SA-15 — Nobody outside this codebase has reviewed the composition.
 
 Gate 9 in the README asks for a reviewer who did not write the protocol.
-This document does not satisfy that gate. A proportionate external pass,
-before production chat or production files, is a design review of this
-handshake and the file seal, not a re-audit of libsodium. A small model of
-the three messages (the pinned keys, the transcript, the role byte) is the
-piece worth checking by machine. Verifpal or CryptoVerif is the sort of
-tool used for that; running one is still work we have not done.
+This document does not satisfy that gate. `docs/protocol-model.md` is the
+piece that reviewer would check: pinned keys, the transcript, the role byte,
+the separate file key, and the explicit non-revocation. Verifpal or
+CryptoVerif has not been run. Nobody outside this codebase has reviewed the
+composition.
 
 ### SA-16 — Only Windows has been built.
 

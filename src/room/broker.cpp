@@ -192,8 +192,9 @@ pm::encryption::Error Broker::invite(const pm::encryption::Identity& owner, cons
         return Error::make(ErrorCode::UnexpectedState, "room is not at the broker");
     if (!same_key(stored->room.owner, owner.public_key()))
         return Error::make(ErrorCode::IdentityMismatch, "only the room owner can invite");
-    if ((grants & ~k_grant_chat) != 0)
-        return Error::make(ErrorCode::InvalidArgument, "this broker grants chat only");
+    constexpr std::uint32_t k_room_grants = k_grant_chat | k_grant_audio | k_grant_video;
+    if ((grants & ~k_room_grants) != 0)
+        return Error::make(ErrorCode::InvalidArgument, "file bytes are not a room grant");
     if (member_of(stored->room, invitee))
         return Error::make(ErrorCode::Replay, "invitee is already a member");
     if (stored->room.members.size() >= k_max_room_members)
@@ -236,6 +237,7 @@ pm::encryption::Error Broker::join(const pm::encryption::Identity& member, const
         return Error::make(ErrorCode::Replay, "device is already a member");
     stored->used_invites.push_back(invite);
     stored->room.members.push_back(invite.invitee);
+    stored->room.grants |= invite.grants;
     out = stored->room;
     return {};
 }

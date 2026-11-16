@@ -1,5 +1,7 @@
 #include "support.hpp"
 
+#include <span>
+
 namespace pm::encryption::cli {
 
 std::vector<std::uint8_t> bytes_of(std::string_view text) {
@@ -8,6 +10,16 @@ std::vector<std::uint8_t> bytes_of(std::string_view text) {
 
 std::string text_of(const std::vector<std::uint8_t>& value) {
     return {value.begin(), value.end()};
+}
+
+std::string hex_of(std::span<const std::uint8_t> bytes) {
+    static constexpr char k_digits[] = "0123456789abcdef";
+    std::string out(bytes.size() * 2, '0');
+    for (std::size_t i = 0; i < bytes.size(); ++i) {
+        out[i * 2] = k_digits[bytes[i] >> 4];
+        out[i * 2 + 1] = k_digits[bytes[i] & 0x0f];
+    }
+    return out;
 }
 
 nlohmann::json error_json(const Error& err) {

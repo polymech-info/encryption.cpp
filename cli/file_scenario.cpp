@@ -11,6 +11,8 @@
 #if PM_ENCRYPTION_VFS
 #include "pm/vfs/store.hpp"
 
+#include <sodium.h>
+
 #include <cstring>
 #include <filesystem>
 #include <span>
@@ -35,6 +37,19 @@ Identity keyed(std::uint8_t tag, Error& err) {
     Seed seed{};
     seed.fill(tag);
     return Identity::from_seed(seed, err);
+}
+
+FileKey file_keyed(std::uint8_t tag, Error& err) {
+    Seed seed{};
+    seed.fill(tag);
+    seed[0] ^= 0x5a;
+    return FileKey::from_seed(seed, err);
+}
+
+void wipe_plain(std::vector<std::uint8_t>& bytes) {
+    if (!bytes.empty())
+        sodium_memzero(bytes.data(), bytes.size());
+    bytes.clear();
 }
 
 std::string as_text(std::span<const std::uint8_t> bytes) {
@@ -93,16 +108,23 @@ int run_group_file_scenario(LogSink& log) {
     Identity bob_id = keyed(0xB2, err);
     Identity carol = keyed(0xC3, err);
     Identity dave_id = keyed(0xD4, err);
-    check(alice.valid() && bob_id.valid() && carol.valid() && dave_id.valid(),
-          "four member identities", err.message);
+    FileKey alice_file = file_keyed(0xA1, err);
+    FileKey bob_file = file_keyed(0xB2, err);
+    FileKey dave_file = file_keyed(0xD4, err);
+    check(alice.valid() && bob_id.valid() && carol.valid() && dave_id.valid()
+              && alice_file.valid() && bob_file.valid() && dave_file.valid(),
+          "four member identities and separate file keys", err.message);
+    check(alice.public_key() != alice_file.public_key()
+              && bob_id.public_key() != bob_file.public_key(),
+          "a file key is not the Ed25519 signing key");
 
     const std::vector<std::uint8_t> plaintext = {
         'g', 'r', 'o', 'u', 'p', '\0', 'c', 'h', 'a', 't', '-', 'f', 'i', 'l', 'e', '!'};
     constexpr std::uint32_t k_chunk = 5;
-    const IdentityPublic recipients[] = {bob_id.public_key(), dave_id.public_key()};
+    const PublicKey recipients[] = {bob_file.public_key(), dave_file.public_key()};
 
     FileOffer offer;
-    err = create_file_offer(alice, transfer, room, "note.bin", "application/octet-stream",
+    err = create_file_offer(alice, alice_file, transfer, room, "note.bin", "application/octet-stream",
                             plaintext, k_chunk, recipients, offer);
     check(!err && offer.chunks.size() == 4, "one ciphertext, sealed to each recipient", err.message);
 
@@ -119,26 +141,34 @@ int run_group_file_scenario(LogSink& log) {
     FileManifest tampered = offer.manifest;
     tampered.room[0] ^= 0x01;
     Error tamper_err;
-    auto rejected = FileInbox::open(keyed(0xB2, tamper_err), tampered, offer.seals, tamper_err);
+    auto rejected = FileInbox::open(file_keyed(0xB2, tamper_err), tampered, offer.seals, tamper_err);
     check(!rejected.valid() && tamper_err.code == ErrorCode::BadSignature,
           "a changed room id fails the sender signature", error_code_name(tamper_err.code));
 
     Error carol_err;
-    auto carol_inbox = FileInbox::open(keyed(0xC3, carol_err), offer.manifest, offer.seals, carol_err);
+    auto carol_file = file_keyed(0xC3, carol_err);
+    auto carol_inbox = FileInbox::open(std::move(carol_file), offer.manifest, offer.seals, carol_err);
     check(!carol_inbox.valid() && carol_err.code == ErrorCode::NotRecipient,
           "a room member who is not a recipient cannot open the content key",
           error_code_name(carol_err.code));
 
     Error dup_err;
-    auto dup_inbox = FileInbox::open(keyed(0xB2, dup_err), offer.manifest, offer.seals, dup_err);
+    auto dup_inbox = FileInbox::open(file_keyed(0xB2, dup_err), offer.manifest, offer.seals, dup_err);
     if (!dup_err)
         dup_err = dup_inbox.accept(0, offer.chunks[0]);
     Error replay_err = dup_inbox.accept(0, offer.chunks[0]);
-    check(!dup_err && replay_err.code == ErrorCode::Replay && dup_inbox.has_chunk(0),
-          "a repeated chunk is a replay", error_code_name(replay_err.code));
+    Error other_cipher = dup_inbox.accept(0, offer.chunks[1]);
+    check(!dup_err && replay_err.code == ErrorCode::Replay && other_cipher.code == ErrorCode::Replay
+              && dup_inbox.has_chunk(0),
+          "a second ciphertext at the same index is a replay", error_code_name(other_cipher.code));
+    std::vector<std::uint8_t> resealed;
+    Error reseal_err = reseal_file_chunk(0, plaintext, resealed);
+    check(reseal_err.code == ErrorCode::InvalidArgument && resealed.empty(),
+          "one content key cannot seal a second plaintext at the same index",
+          error_code_name(reseal_err.code));
 
     Error corrupt_err;
-    auto corrupt_inbox = FileInbox::open(keyed(0xB2, corrupt_err), offer.manifest, offer.seals, corrupt_err);
+    auto corrupt_inbox = FileInbox::open(file_keyed(0xB2, corrupt_err), offer.manifest, offer.seals, corrupt_err);
     auto corrupt_chunk = offer.chunks[1];
     if (!corrupt_chunk.empty())
         corrupt_chunk.back() ^= 0x01;
@@ -148,7 +178,7 @@ int run_group_file_scenario(LogSink& log) {
           "a corrupted chunk fails authentication", error_code_name(corrupt_err.code));
 
     Error missing_err;
-    auto missing_inbox = FileInbox::open(keyed(0xB2, missing_err), offer.manifest, offer.seals, missing_err);
+    auto missing_inbox = FileInbox::open(file_keyed(0xB2, missing_err), offer.manifest, offer.seals, missing_err);
     std::vector<std::uint8_t> too_early;
     if (!missing_err)
         missing_err = missing_inbox.assemble(too_early);
@@ -156,7 +186,7 @@ int run_group_file_scenario(LogSink& log) {
           "assembly waits until every chunk is present", error_code_name(missing_err.code));
 
     Error dave_err;
-    auto dave = FileInbox::open(keyed(0xD4, dave_err), offer.manifest, offer.seals, dave_err);
+    auto dave = FileInbox::open(file_keyed(0xD4, dave_err), offer.manifest, offer.seals, dave_err);
     for (int index = static_cast<int>(offer.chunks.size()) - 1; index >= 0 && !dave_err; --index)
         dave_err = dave.accept(static_cast<std::uint32_t>(index), offer.chunks[static_cast<std::size_t>(index)]);
     std::vector<std::uint8_t> dave_plain;
@@ -165,11 +195,30 @@ int run_group_file_scenario(LogSink& log) {
     check(!dave_err && same_bytes(dave_plain, plaintext),
           "an offline member opens the same chunks in reverse order", dave_err.message);
 
+    FileOffer revised;
+    const PublicKey bob_only[] = {bob_file.public_key()};
+    Error revise_err = create_file_offer(alice, alice_file, transfer, room, "note.bin",
+                                         "application/octet-stream", plaintext, k_chunk, bob_only,
+                                         revised, 2);
+    Error dave_removed;
+    auto dave_after = FileInbox::open(file_keyed(0xD4, dave_removed), revised.manifest, revised.seals,
+                                      dave_removed);
+    Error bob_still;
+    auto bob_revised = FileInbox::open(file_keyed(0xB2, bob_still), revised.manifest, revised.seals,
+                                       bob_still);
+    if (!bob_still && !revised.chunks.empty())
+        bob_still = bob_revised.accept(0, revised.chunks[0]);
+    check(!revise_err && !dave_err && dave_removed.code == ErrorCode::NotRecipient
+              && !dave_after.valid() && !bob_still && bob_revised.has_chunk(0),
+          "dropping a recipient does not revoke the older ciphertext",
+          dave_removed ? error_code_name(dave_removed.code) : bob_still.message);
+    wipe_plain(dave_plain);
+
     FileOffer empty_offer;
-    err = create_file_offer(alice, transfer, room, "empty.bin", "application/octet-stream",
+    err = create_file_offer(alice, alice_file, transfer, room, "empty.bin", "application/octet-stream",
                             {}, k_chunk, recipients, empty_offer);
     Error empty_err;
-    auto empty_inbox = FileInbox::open(keyed(0xB2, empty_err), empty_offer.manifest, empty_offer.seals, empty_err);
+    auto empty_inbox = FileInbox::open(file_keyed(0xB2, empty_err), empty_offer.manifest, empty_offer.seals, empty_err);
     std::vector<std::uint8_t> empty_plain;
     if (!empty_err)
         empty_err = empty_inbox.assemble(empty_plain);
@@ -249,7 +298,7 @@ int run_group_file_scenario(LogSink& log) {
     check(ciphertext, "the shared mount holds ciphertext, not the file bytes");
 
     Error resume_err;
-    auto partial = FileInbox::open(keyed(0xB2, resume_err), decoded.manifest, decoded.seals, resume_err);
+    auto partial = FileInbox::open(file_keyed(0xB2, resume_err), decoded.manifest, decoded.seals, resume_err);
     for (std::uint32_t index = 0; !resume_err && index + 1 < offer.chunks.size(); ++index) {
         auto chunk = vfs_read(store, bob_caller, "room", drop + "/" + std::to_string(index));
         if (chunk.error) {
@@ -273,7 +322,7 @@ int run_group_file_scenario(LogSink& log) {
         if (!bad.plaintext.empty() && !bad.plaintext[0].empty())
             bad.plaintext[0][0] ^= 0x01;
         Error bad_err;
-        auto bad_inbox = FileInbox::resume(keyed(0xB2, bad_err), decoded.manifest, decoded.seals,
+        auto bad_inbox = FileInbox::resume(file_keyed(0xB2, bad_err), decoded.manifest, decoded.seals,
                                            std::move(bad), bad_err);
         check(!bad_inbox.valid() && bad_err.code == ErrorCode::AuthenticationFailed,
               "a tampered staging piece is rejected on resume", error_code_name(bad_err.code));
@@ -294,7 +343,7 @@ int run_group_file_scenario(LogSink& log) {
         restored.plaintext[i].assign(piece.body.begin(), piece.body.end());
     }
     Error bob_err;
-    auto bob = FileInbox::resume(keyed(0xB2, bob_err), decoded.manifest, decoded.seals,
+    auto bob = FileInbox::resume(file_keyed(0xB2, bob_err), decoded.manifest, decoded.seals,
                                  std::move(restored), bob_err);
     if (!bob_err && bob.missing().size() != 1)
         bob_err = Error::make(ErrorCode::UnexpectedState, "resume did not keep the missing chunk");
@@ -320,6 +369,19 @@ int run_group_file_scenario(LogSink& log) {
                       plaintext);
     check(!resume_err && published, "resume from the member home publishes the verified file",
           resume_err ? resume_err.message : bob_err.message);
+    wipe_plain(bob_plain);
+    bool staging_deleted = published;
+    for (std::size_t i = 0; staging_deleted && i < saved.received.size(); ++i) {
+        if (saved.received[i] == 0)
+            continue;
+        const std::string piece = "staging/note.bin." + std::to_string(i);
+        auto removed = store.remove(bob_caller, "home", piece, false);
+        auto still = store.stat(bob_caller, "home", piece);
+        if (removed || !still.error)
+            staging_deleted = false;
+    }
+    saved.wipe();
+    check(staging_deleted, "staging plaintext is deleted after publish");
 
     vfs_err = vfs_write(store, alice_caller, "room", "drops/empty/manifest.bin", {});
     std::vector<std::uint8_t> empty_blob;
@@ -346,6 +408,11 @@ int run_group_file_scenario(LogSink& log) {
                      {"schema", "pm.encryption.file.v1"},
                      {"scenario", "group-file"},
                      {"group_key", "per-recipient-seal"},
+                     {"file_key", "separate-x25519"},
+                     {"file_key_is_identity", false},
+                     {"removal_revokes_old_ciphertext", false},
+                     {"chunk_reseal", false},
+                     {"staging_deleted", staging_deleted},
                      {"mls", false},
                      {"members", 4},
                      {"recipients", 2},

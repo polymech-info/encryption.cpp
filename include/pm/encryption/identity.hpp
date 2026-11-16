@@ -17,11 +17,10 @@ using Signature = std::array<std::uint8_t, k_signature_bytes>;
 /**
  * Long-term Ed25519 device identity.
  *
- * The identity signs handshakes and file manifests. A file offer also seals
- * its content key to this long-term key, so a stored file can be opened after
- * the live channel is gone. Compromising the identity decrypts those files.
- * Callers pin the peer IdentityPublic before trusting a signature; this type
- * does not decide trust, storage, or rotation.
+ * The identity signs handshakes and file manifests. It does not open file
+ * content keys. Those are sealed to a separate FileKey. Callers pin the peer
+ * IdentityPublic before trusting a signature. This type does not decide trust,
+ * storage, or rotation.
  */
 class Identity {
 public:
@@ -44,8 +43,6 @@ public:
                         std::span<const std::uint8_t> signature);
 
 private:
-    friend Error identity_curve_secret(const Identity& identity,
-                                      std::array<std::uint8_t, 32>& out);
     IdentityPublic public_{};
     std::array<std::uint8_t, 64> secret_{};
     bool valid_ = false;

@@ -45,6 +45,7 @@ public:
     Error write_message(std::vector<std::uint8_t>& message);
     Error read_message(std::span<const std::uint8_t> message);
     bool complete() const noexcept;
+    std::vector<std::uint8_t> transcript() const;
     SecureChannel take_channel(Error& err);
 
 private:

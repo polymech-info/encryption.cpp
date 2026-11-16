@@ -29,8 +29,9 @@ check(room.json?.fingerprint_mismatch_rejected === true, 'a wrong fingerprint is
 check(room.json?.substituted_offer_rejected === true, 'a swapped initiator key is rejected');
 check(room.json?.members === 2 && room.json?.grants === 'chat', 'the room has the two paired devices');
 check(room.json?.audio === false && room.json?.video === false && room.json?.files === false,
-  'voice, video, and file grants stay off');
-check(room.json?.media_grants_rejected === true, 'the broker refuses media grants');
+  'this chat room did not join a media grant');
+check(room.json?.files_grant_rejected === true, 'file bytes are not a room grant');
+check(room.json?.media_grant_separate === true, 'audio and video are a separate invite');
 check(room.json?.invite_reused_rejected === true, 'an invite is single-use');
 check(room.json?.outsider_rejected === true, 'an unpaired device cannot post');
 check(room.json?.relayed_chat === true && room.json?.broker_sees_plaintext === false,

@@ -7,7 +7,10 @@
       "displayName": "pm-encryption dev",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/dev",
-      "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" }
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "PM_ENCRYPTION_LIBSIGNAL": "ON"
+      }
     },
     {
       "name": "release",

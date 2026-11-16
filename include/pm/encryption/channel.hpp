@@ -16,6 +16,9 @@ inline constexpr std::size_t k_public_key_bytes = 32;
 inline constexpr std::size_t k_secret_key_bytes = 32;
 inline constexpr std::size_t k_session_id_bytes = 16;
 inline constexpr std::size_t k_default_max_plaintext = 64U * 1024U * 1024U;
+inline constexpr int k_replay_window = 64;
+inline constexpr std::uint64_t k_first_sequence = 0;
+inline constexpr bool k_channel_ratchet = false;
 
 using PublicKey = std::array<std::uint8_t, k_public_key_bytes>;
 using SessionId = std::array<std::uint8_t, k_session_id_bytes>;
@@ -94,8 +97,14 @@ bool decode_base64(std::string_view text, std::vector<std::uint8_t>& out,
  * do not authenticate a device identity. Handshake is the path that pins both
  * Ed25519 identities into the transcript and the derived keys.
  *
- * SecureChannel binds every frame to a session id and caller context, and
- * rejects replayed or stale frames. It does not own transport, persistence,
+ * One transmit key and one receive key live for the process. k_channel_ratchet
+ * is false: a copy of either key decrypts every frame in that direction, past
+ * and future, until the process exits. This channel does not keep history.
+ * Callers that need a transcript store it somewhere else.
+ *
+ * The first accepted sequence is k_first_sequence (0). A higher sequence
+ * before that does not move the window. After 0, k_replay_window frames may
+ * arrive out of order. SecureChannel does not own transport, persistence,
  * authorization, or application payload semantics.
  */
 class SecureChannel {

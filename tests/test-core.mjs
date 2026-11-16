@@ -18,14 +18,18 @@ check(capabilities.status === 0, 'capabilities exits 0', capabilities.stderr);
 check(capabilities.json?.schema === 'pm.encryption.capabilities.v1', 'capabilities schema');
 check(capabilities.json?.secure_channel_e2ee === true, 'generic secure channel is compiled');
 check(capabilities.json?.chat_http_sse_harness === true, 'chat HTTP/SSE vertical is compiled');
-check(capabilities.json?.libsignal === false, 'libsignal is not silently enabled');
+check(capabilities.json?.libsignal === true, 'libsignal adapter is compiled in the dev build');
 check(capabilities.json?.policies?.live_session === true, 'live session policy is enabled');
-check(capabilities.json?.policies?.signal === false, 'signal session policy is a separate disabled feature');
+check(capabilities.json?.policies?.signal === true, 'signal session policy is enabled');
 check(capabilities.json?.authenticated_handshake === true, 'authenticated handshake is compiled');
 check(capabilities.json?.handshake === 'sigma-i-v1', 'handshake profile is sigma-i-v1');
+check(capabilities.json?.ratchet === false, 'the live channel does not ratchet');
+check(capabilities.json?.history === 'out-of-channel', 'history stays outside this channel');
+check(capabilities.json?.replay_rule === 'sequence-0-then-window-64',
+  'replay starts at sequence 0');
 check(capabilities.json?.features?.unauthenticated_kx === true,
   'unauthenticated exchange is an explicit feature flag');
-check(capabilities.json?.features?.libsignal === false, 'libsignal CMake feature is off');
+check(capabilities.json?.features?.libsignal === true, 'libsignal CMake feature is on');
 check(capabilities.json?.features?.http_harness === true, 'HTTP harness CMake feature is on');
 
 const seed = '11'.repeat(32);

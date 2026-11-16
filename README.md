@@ -53,17 +53,25 @@ The signatures bind version, suite, context, session id, both identities, and
 both X25519 ephemerals, and HKDF-SHA256 derives one channel key in each
 direction. Those keys encrypt every frame until the process exits.
 
-`signal` is a separate session policy: PQXDH, the Double Ratchet, and Sesame.
-It is listed by `pm-encryption policy list` and stays disabled. Turning it on
-requires `-DPM_ENCRYPTION_LIBSIGNAL=ON` and the vendored sibling.
+`signal` is a separate session policy. The dev preset links
+`packages/libsignal`, an AGPL adapter over upstream `libsignal-protocol`
+0.108.0. That build runs PQXDH and the Triple Ratchet for an in-memory text
+room. The option default stays off, so a host that does not opt in stays
+BSD-only. Sesame, durable session storage, and the upstream libsignal test
+suite are still open. That session also wraps one audio key and one video
+key. The frames themselves are `PMA1/v1` and `PMV1/v1`: a lost packet is a
+gap, and a repeated sequence is a replay. Capture, codecs, and WebRTC are
+not in this library.
 
 `FileOffer` is the group-file envelope. The sender encrypts the bytes once
-with a random content key, signs the manifest, and seals that key to each
-recipient identity. A chat message would carry the manifest, not the file.
-This is not MLS: there is no group ratchet, and the long-term identity key can
-open every file sealed to that member. `pm-encryption scenario group-file`
-puts the ciphertext on a `vfs.cpp` room mount and the plaintext only in the
-recipient home, after every chunk and the content hash check.
+with a random content key, signs the manifest with the Ed25519 identity, and
+seals that key to each recipient's separate X25519 file key. A chat message
+would carry the manifest, not the file. This is not MLS: there is no group
+ratchet, and dropping a recipient from a later revision does not make the
+older ciphertext unreadable. `pm-encryption scenario group-file` puts the
+ciphertext on a `vfs.cpp` room mount and the plaintext only in the recipient
+home, after every chunk and the content hash check. Staging plaintext is
+deleted after publish.
 
 The channel API does not contain chat, HTTP, SSE, file, or media concepts.
 Those are vertical protocols which pass bounded payload bytes, a content type,
@@ -76,10 +84,15 @@ generic channel over real HTTP/SSE:
 pm-encryption capabilities
 pm-encryption policy list
 pm-encryption policy live
+pm-encryption policy signal
+pm-encryption signal-room --text "hello"
+pm-encryption media-room
 pm-encryption selftest
 pm-encryption identity --seed <64 hex chars>
 pm-encryption scenario tanit-chat-wifi
 pm-encryption scenario group-file
+pm-encryption vectors
+pm-encryption fuzz
 pm-encryption chat-harness --text "hello"
 pm-encryption room-harness --text "hello"
 pm-encryption roundtrip --text "hello"
@@ -118,7 +131,7 @@ and the HTTP mode is also a CLI flag.
 | `PM_ENCRYPTION_UNAUTHENTICATED_KX` | `ON` | Compiles `SecureChannel::initiator/responder`, which do not bind a device identity |
 | `PM_ENCRYPTION_HTTP_HARNESS` | `ON` | Compiles the standalone HTTP/SSE harness |
 | `PM_ENCRYPTION_VFS` | `ON` | Links `packages/vfs.cpp` into `scenario group-file`. The library itself does not link it |
-| `PM_ENCRYPTION_LIBSIGNAL` | `OFF` | AGPL-3.0 libsignal adapter. Accepted, and fail-closed until `packages/libsignal` is vendored |
+| `PM_ENCRYPTION_LIBSIGNAL` | `OFF` | AGPL-3.0 libsignal adapter. The dev preset turns it on for the text room. Release stays off |
 | `PM_ENCRYPTION_OPENMLS` | `OFF` | Group-messaging adapter. Fail-closed until `packages/openmls` is vendored |
 
 ```text
@@ -133,11 +146,10 @@ Not implemented yet:
 
 - durable device identity and secure key storage;
 - pairing, invite, and fingerprint UX that produces the pinned identity;
-- crash-safe persistent counters or ratchet state;
-- the libsignal adapter itself, offline messages, and multi-device convergence;
+- crash-safe persistent counters, including the signal session store;
+- Sesame multi-device convergence;
 - MLS groups;
-- a separate file key, so attachments are not sealed to the chat identity;
-- any Tanit product UI, broker, P2P path, Android, or WebRTC integration.
+- any Tanit product UI, listening broker, P2P path, Android, or WebRTC integration.
 
 ## Goals
 
@@ -241,13 +253,13 @@ package:
 packages/
   commons.cpp/
   encryption.cpp/       BSD PolyMech API and protocol composition
-  libsignal/            pinned upstream Signal source; AGPL-3.0
+  libsignal/            AGPL adapter; Cargo fetches libsignal-protocol v0.108.0
 ```
 
-`packages/libsignal/` should remain recognizably upstream: pinned commit,
-upstream license and notices, provenance file, patch list, and reproducible
-update procedure. Do not edit generated or cryptographic internals casually.
-Local integration patches should be small, reviewable, and replayable.
+`packages/libsignal/` does not vendor a rewritten protocol. `PROVENANCE.md`
+records the tag, and `Cargo.lock` records the resolved commit. The adapter
+calls the public Rust API. A version bump changes the tag, refreshes the
+lock, and re-runs `signal-room`. Do not patch the upstream tree in place.
 
 Vendoring libsignal does not relicense it. Official libsignal currently:
 
@@ -285,7 +297,7 @@ Other expected dependencies:
 | Dependency | Role | Initial status |
 |---|---|---|
 | libsodium | Ed25519, X25519 primitives, XChaCha20-Poly1305, secure random | Required for the first crypto profile |
-| libsignal | PQXDH, Double Ratchet, multi-device session management | Optional experiment, gated |
+| libsignal | PQXDH and the Triple Ratchet for the text room | Optional. Dev preset on, default off. Multi-device still open |
 | OpenMLS | RFC 9420 group messaging | Later optional sibling |
 | libdatachannel/libwebrtc | Connectivity and media transport | Host dependency, not linked into core |
 | Android Keystore / Windows CNG/DPAPI | Protect local wrapping keys | Host adapter |
@@ -424,8 +436,9 @@ label is older than the property; see SA-1. Signal remains Layer 6 because
 its session outlives one connection and must decrypt messages while the peer
 is offline.
 
-Role binding, the transcript hash, version refusal, and the channel replay
-window are in this profile. Still to add on this layer:
+Role binding, the transcript hash, and version refusal are in this profile.
+The replay rule is sequence 0, then a 64-frame window. One channel key covers
+the process, and history stays outside the channel. Still to add on this layer:
 
 - separate derived keys for control, manifests, file-key wrapping, chunks, and
   resume tokens;
@@ -438,8 +451,10 @@ device/room/transfer context.
 
 ### Layer 4 — File cryptography
 
-The envelope below exists and is covered by `scenario group-file`. It is not
-product-ready; SA-3 and SA-12 say why:
+The envelope below exists and is covered by `scenario group-file`. The content
+key is sealed to a separate X25519 file key. A later revision that drops a
+recipient does not make the older ciphertext unreadable. It is not
+product-ready while SA-15 is open:
 
 - signed and encrypted manifest;
 - independent random content key per file version;
@@ -486,17 +501,26 @@ device changing keys during pairing.
 
 ### Layer 6 — Signal one-to-one messaging
 
-Only after Layers 0–5 are stable:
+The dev preset runs the text slice. `pm-encryption signal-room` pairs two
+Ed25519 devices in the in-process broker, carries a prekey bundle and the
+ciphertext as opaque frames, and checks the upstream session: the first
+message opens while the recipient was offline, the reply advances the
+ratchet, a later message can arrive first, a bundle with no one-time prekey
+still opens, and a replay, a flipped frame, and an outsider are rejected.
+The chat bytes are not printed and are not stored in the broker. Sessions
+live in the adapter process only. `pm-encryption media-room` then wraps an
+audio key and a video key through that session. The broker stores the wraps
+and does not store the media frames.
 
-1. Build the pinned sibling unchanged.
-2. Run upstream libsignal tests and vectors.
-3. Implement the optional `IOneToOneProtocol` adapter.
-4. Add a prekey service abstraction; the encryption library does not own HTTP.
-5. Persist identity/prekeys/session/skipped keys transactionally.
-6. Encrypt message envelopes and file-key attachment references.
-7. Add cross-version and multi-device tests.
+Still open on this layer:
 
-Required scenarios:
+1. Run the upstream libsignal tests and vectors.
+2. Persist identity, prekeys, sessions, and skipped keys transactionally.
+3. Add a prekey service. The encryption library does not own HTTP.
+4. Cover file-key attachment references on this session.
+5. Add cross-version and multi-device tests.
+
+`signal-room` already covers the first three scenarios below. The rest are open:
 
 - recipient offline before the first message;
 - no one-time prekey available;
@@ -729,6 +753,8 @@ npm run test:policy
 npm run test:file
 npm run test:harness
 npm run test:room
+npm run test:signal
+npm run test:media
 npm run test:http
 npm run test:auth
 ```
@@ -805,16 +831,21 @@ Windows standalone. The library links no sibling; the CLI links `vfs.cpp` for `g
 - [x] CLI split by feature, host-passed `LogSink`, `--log-level`
 - [x] HTTP/SSE harness in unauthenticated and `--authenticated` modes
 - [x] CMake feature flags, including fail-closed libsignal and OpenMLS
-- [x] `group-file` scenario: sealed manifest, vfs room mount, hostile chunks, resume
+- [x] `group-file` scenario: separate file keys, vfs room mount, hostile chunks, resume, staging wipe
+- [x] Published vectors and a deterministic parser fuzz
 - [x] `chat-harness`: pinned loopback desktop chat, 16 KiB cap, no broker
 - [x] `pm::room` broker: fingerprint pairing, single-use invite, opaque relay
-- [x] `npm test` covers core, `policy live`, group-file, HTTP, and authenticated handshake
+- [x] `npm test` covers core, `policy live`, the signal text room, the media room, group-file, vectors, fuzz, HTTP, and authenticated handshake
 
 ## Next
 
-The desktop harness is in place. Production Tanit chat stays behind the list
-below: a stolen channel key still reads the whole session, files are still
-sealed to the signing identity, and there is still no broker.
+The live channel still uses one key for the process. The signal text room
+ratchets through libsignal, in memory. Audio and video frames use a separate
+track key and still have no capture path or WebRTC transport. Sesame and a
+durable store are open. An old file still opens after the recipient is
+dropped from a later revision. The remaining production gates are an external
+review of `docs/protocol-model.md`, a Linux and Android build, and any
+listening, tailnet, or P2P broker.
 
 ## Todos
 
@@ -831,23 +862,27 @@ Desktop harness, `pm-encryption chat-harness`:
 
 Before any production claim:
 
-- [ ] SA-2 A stolen channel key reads the whole session; ratchet, or say so in the product and keep history elsewhere
-- [ ] SA-3 Separate file keys from the Ed25519 signing identity
-- [ ] SA-6 Fuzz the handshake, frame, and file parsers
-- [ ] SA-7 Choose the replay rule for a transport that reorders or drops
-- [ ] SA-10 Delete staging plaintext and wipe file snapshots
-- [ ] SA-11 Lock the "one content key, one plaintext per chunk index" invariant with a test
-- [ ] SA-12 Member removal does not revoke an old file; say so, or change the envelope
-- [ ] SA-14 Publish handshake and file vectors a second implementation can match
-- [ ] SA-15 External review of this composition
-- [ ] SA-16 Configure on Linux and the Android NDK
-- [ ] SA-17 The in-process broker is only the loopback stand-in. A listening broker, tailnet bind, or P2P path is still a new adversary
-- [ ] `signal` session policy, behind `PM_ENCRYPTION_LIBSIGNAL`, after the file key split
+- [x] SA-2 The live channel states one key and keeps history out of the channel. The signal text room ratchets through libsignal
+- [x] SA-3 File content keys are sealed to a separate X25519 `FileKey`
+- [x] SA-6 `pm-encryption fuzz` mutates the handshake, frame, and file parsers
+- [x] SA-7 The first accepted sequence is 0. A high sequence before that does not move the window
+- [x] SA-10 Staging plaintext is deleted after publish, and file snapshots wipe themselves
+- [x] SA-11 `reseal_file_chunk` refuses a second plaintext at the same index
+- [x] SA-12 Member removal does not revoke an old file, and the scenario locks that
+- [x] SA-14 `tests/vectors/kat.v1.json` is the handshake, frame, and file vector
+- [ ] SA-15 External review of `docs/protocol-model.md`. The model is written. Nobody outside this codebase has checked it
+- [ ] SA-16 Configure on Linux and the Android NDK. This pass was Windows only
+- [ ] SA-17 A listening broker, tailnet bind, or P2P path is still a new adversary. The in-process broker is the stand-in
+- [x] `signal` text room, behind `PM_ENCRYPTION_LIBSIGNAL` in the dev preset. In memory
+- [x] Audio and video frames (`PMA1`, `PMV1`). The broker carries the key wrap, not the frames
+- [ ] Media capture, codecs, and a WebRTC transport
+- [ ] Signal persistence, Sesame, and the upstream libsignal test suite
 - [ ] Host embedding, with `commons.cpp` when the host image already has it
 
 ## References
 
 - This package's security assessment: `docs/security-assessment.md`
+- Protocol model for an external review: `docs/protocol-model.md`
 - Room broker and Tailscale: `docs/room-broker.md`
 - Phone mesh design: `../../docs/phone-mesh.md`
 - Existing P2P notes: `../commons.cpp/docs/security/p2p.md`

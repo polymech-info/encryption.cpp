@@ -20,17 +20,18 @@ not grow a second pairing or room parser.
    and hands it to the other device. That device signs an accept. Both devices
    show a fingerprint over the pairing id and the two public keys, sorted.
    Pairing finishes only when the displayed fingerprints match. The first
-   grant is chat. Files, audio, and video are separate grants and this broker
-   rejects them.
+   grant is chat. Audio and video are extra bits on an invite. File bytes are
+   not a room grant.
 2. The owner creates a room and signs an invite. The invite is single-use.
    Joining proves the invitee holds the matching secret.
 3. Members post opaque frames. The broker checks the sender is a member and
    that the frame signature matches. It assigns the next sequence. It does
    not decrypt.
 4. A chat frame may name a file manifest. The file bytes stay in the file
-   path. Voice and video stay in the desktop and phone media stacks
-   (`ChatWebPanel` already has those on Windows). The broker does not carry
-   PCM or encoded video.
+   path. `audio.cpp` and `video.cpp` seal encoded frames under a track key
+   that the signal session wraps once. The broker may carry that key wrap.
+   It does not carry the audio or video frames. Capture, codecs, and WebRTC
+   stay in the host.
 
 `pm-encryption room-harness` runs that sequence with two paired devices and
 one outsider. `pm-encryption chat-harness` remains the direct loopback socket

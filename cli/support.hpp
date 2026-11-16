@@ -28,6 +28,7 @@ struct Check {
 
 std::vector<std::uint8_t> bytes_of(std::string_view text);
 std::string text_of(const std::vector<std::uint8_t>& value);
+std::string hex_of(std::span<const std::uint8_t> bytes);
 nlohmann::json error_json(const Error& err);
 bool parse_seed_hex(std::string_view hex, Seed& out);
 SessionId test_session(std::uint8_t suffix = 0);

@@ -354,6 +354,12 @@ bool Handshake::complete() const noexcept {
     return channel_ready_ && channel_.valid();
 }
 
+std::vector<std::uint8_t> Handshake::transcript() const {
+    if (!complete())
+        return {};
+    return key_transcript();
+}
+
 SecureChannel Handshake::take_channel(Error& err) {
     err = {};
     if (!complete()) {

@@ -131,6 +131,7 @@ void append_manifest_body(std::vector<std::uint8_t>& out, const FileManifest& ma
     append_bytes(out, manifest.transfer);
     append_bytes(out, manifest.room);
     append_bytes(out, manifest.sender);
+    append_bytes(out, manifest.sender_file);
     append_u16(out, static_cast<std::uint16_t>(manifest.name.size()));
     out.insert(out.end(), manifest.name.begin(), manifest.name.end());
     append_u16(out, static_cast<std::uint16_t>(manifest.media_type.size()));
@@ -155,13 +156,6 @@ Error seal_hash_of(std::span<const RecipientSeal> seals, FileHash& out) {
         append_bytes(body, seal.box);
     }
     return hash_bytes(body, out);
-}
-
-Error curve_public(const IdentityPublic& identity, std::array<std::uint8_t, 32>& out) {
-    out.fill(0);
-    if (crypto_sign_ed25519_pk_to_curve25519(out.data(), identity.data()) != 0)
-        return Error::make(ErrorCode::CryptoUnavailable, "identity public conversion failed");
-    return {};
 }
 
 std::vector<std::uint8_t> chunk_aad(const FileManifest& manifest, std::uint32_t index,
@@ -216,33 +210,33 @@ Error verify_manifest(const FileManifest& manifest, std::span<const RecipientSea
     return Identity::verify(manifest.sender, body, manifest.signature);
 }
 
-Error open_content_key(const Identity& recipient, const FileManifest& manifest,
+Error open_content_key(const PublicKey& recipient_public,
+                       std::span<const std::uint8_t, 32> recipient_secret,
+                       const FileManifest& manifest,
                        std::span<const RecipientSeal> seals, std::array<std::uint8_t, 32>& key) {
     key.fill(0);
     const RecipientSeal* mine = nullptr;
     for (const RecipientSeal& seal : seals) {
-        if (sodium_memcmp(seal.recipient.data(), recipient.public_key().data(),
+        if (sodium_memcmp(seal.recipient.data(), recipient_public.data(),
                           seal.recipient.size()) == 0) {
             mine = &seal;
             break;
         }
     }
     if (!mine)
-        return Error::make(ErrorCode::NotRecipient, "identity is not a recipient of this file");
+        return Error::make(ErrorCode::NotRecipient, "file key is not a recipient of this file");
     if (mine->box.size() != k_box_bytes)
         return Error::make(ErrorCode::InvalidFrame, "recipient seal length is invalid");
+    PublicKey zero{};
+    if (sodium_memcmp(manifest.sender_file.data(), zero.data(), zero.size()) == 0)
+        return Error::make(ErrorCode::InvalidArgument, "sender file key is empty");
 
-    std::array<std::uint8_t, 32> recipient_sk{};
-    std::array<std::uint8_t, 32> sender_pk{};
-    Error err = identity_curve_secret(recipient, recipient_sk);
-    if (!err)
-        err = curve_public(manifest.sender, sender_pk);
     std::vector<std::uint8_t> opened(k_box_payload);
-    if (!err && crypto_box_open_easy(opened.data(), mine->box.data(), mine->box.size(),
-                                     mine->nonce.data(), sender_pk.data(), recipient_sk.data()) != 0)
+    Error err;
+    if (crypto_box_open_easy(opened.data(), mine->box.data(), mine->box.size(),
+                             mine->nonce.data(), manifest.sender_file.data(),
+                             recipient_secret.data()) != 0)
         err = Error::make(ErrorCode::AuthenticationFailed, "recipient seal failed authentication");
-    wipe_bytes(recipient_sk.data(), recipient_sk.size());
-    wipe_bytes(sender_pk.data(), sender_pk.size());
     if (err) {
         wipe_bytes(opened.data(), opened.size());
         return err;
@@ -265,7 +259,7 @@ Error open_content_key(const Identity& recipient, const FileManifest& manifest,
     if (!framed || std::memcmp(magic.data(), k_key_magic, 4) != 0 || version[0] != k_version
         || std::memcmp(transfer.data(), manifest.transfer.data(), transfer.size()) != 0
         || std::memcmp(room.data(), manifest.room.data(), room.size()) != 0
-        || sodium_memcmp(who.data(), recipient.public_key().data(), who.size()) != 0) {
+        || sodium_memcmp(who.data(), recipient_public.data(), who.size()) != 0) {
         wipe_bytes(opened.data(), opened.size());
         return Error::make(ErrorCode::AuthenticationFailed, "recipient seal is bound to another file");
     }
@@ -276,30 +270,122 @@ Error open_content_key(const Identity& recipient, const FileManifest& manifest,
 
 } // namespace
 
-Error identity_curve_secret(const Identity& identity, std::array<std::uint8_t, 32>& out) {
-    out.fill(0);
-    if (!identity.valid())
-        return Error::make(ErrorCode::InvalidArgument, "identity is invalid");
-    if (crypto_sign_ed25519_sk_to_curve25519(out.data(), identity.secret_.data()) != 0)
-        return Error::make(ErrorCode::CryptoUnavailable, "identity secret conversion failed");
-    return {};
+FileKey::FileKey() = default;
+
+FileKey::~FileKey() {
+    wipe_bytes(secret_.data(), secret_.size());
+}
+
+FileKey::FileKey(FileKey&& other) noexcept
+    : public_(other.public_), secret_(other.secret_), valid_(other.valid_) {
+    wipe_bytes(other.secret_.data(), other.secret_.size());
+    other.public_.fill(0);
+    other.valid_ = false;
+}
+
+FileKey& FileKey::operator=(FileKey&& other) noexcept {
+    if (this == &other)
+        return *this;
+    wipe_bytes(secret_.data(), secret_.size());
+    public_ = other.public_;
+    secret_ = other.secret_;
+    valid_ = other.valid_;
+    wipe_bytes(other.secret_.data(), other.secret_.size());
+    other.public_.fill(0);
+    other.valid_ = false;
+    return *this;
+}
+
+FileKey FileKey::generate(Error& err) {
+    err = {};
+    FileKey out;
+    if (!init_crypto(err))
+        return out;
+    if (crypto_box_keypair(out.public_.data(), out.secret_.data()) != 0) {
+        err = Error::make(ErrorCode::CryptoUnavailable, "file key generation failed");
+        return out;
+    }
+    out.valid_ = true;
+    return out;
+}
+
+FileKey FileKey::from_seed(const Seed& seed, Error& err) {
+    err = {};
+    FileKey out;
+    if (!init_crypto(err))
+        return out;
+    if (crypto_box_seed_keypair(out.public_.data(), out.secret_.data(), seed.data()) != 0) {
+        err = Error::make(ErrorCode::CryptoUnavailable, "seeded file key generation failed");
+        return out;
+    }
+    out.valid_ = true;
+    return out;
+}
+
+FileSnapshot::FileSnapshot() = default;
+
+FileSnapshot::~FileSnapshot() {
+    wipe();
+}
+
+FileSnapshot::FileSnapshot(const FileSnapshot& other)
+    : received(other.received), plaintext(other.plaintext) {}
+
+FileSnapshot& FileSnapshot::operator=(const FileSnapshot& other) {
+    if (this == &other)
+        return *this;
+    wipe();
+    received = other.received;
+    plaintext = other.plaintext;
+    return *this;
+}
+
+FileSnapshot::FileSnapshot(FileSnapshot&& other) noexcept
+    : received(std::move(other.received)), plaintext(std::move(other.plaintext)) {}
+
+FileSnapshot& FileSnapshot::operator=(FileSnapshot&& other) noexcept {
+    if (this == &other)
+        return *this;
+    wipe();
+    received = std::move(other.received);
+    plaintext = std::move(other.plaintext);
+    return *this;
+}
+
+void FileSnapshot::wipe() noexcept {
+    for (auto& piece : plaintext)
+        wipe_bytes(piece.data(), piece.size());
+    plaintext.clear();
+    received.clear();
+}
+
+Error reseal_file_chunk(std::uint32_t, std::span<const std::uint8_t>, std::vector<std::uint8_t>& out) {
+    out.clear();
+    return Error::make(ErrorCode::InvalidArgument,
+                       "a content key seals one plaintext per chunk index");
 }
 
 Error create_file_offer(const Identity& sender,
+                        const FileKey& sender_file_key,
                         const FileId& transfer,
                         const FileId& room,
                         std::string name,
                         std::string media_type,
                         std::span<const std::uint8_t> plaintext,
                         std::uint32_t chunk_size,
-                        std::span<const IdentityPublic> recipients,
-                        FileOffer& out) {
+                        std::span<const PublicKey> recipients,
+                        FileOffer& out,
+                        std::uint32_t revision) {
     out = {};
     Error err;
     if (!init_crypto(err))
         return err;
     if (!sender.valid())
         return Error::make(ErrorCode::InvalidArgument, "sender identity is invalid");
+    if (!sender_file_key.valid())
+        return Error::make(ErrorCode::InvalidArgument, "sender file key is invalid");
+    if (revision == 0)
+        return Error::make(ErrorCode::InvalidArgument, "file revision is invalid");
     FileId zero{};
     if (sodium_memcmp(transfer.data(), zero.data(), transfer.size()) == 0
         || sodium_memcmp(room.data(), zero.data(), room.size()) == 0)
@@ -311,7 +397,7 @@ Error create_file_offer(const Identity& sender,
     if (recipients.empty() || recipients.size() > k_max_file_recipients)
         return Error::make(ErrorCode::InvalidArgument, "recipient set size is invalid");
 
-    std::vector<IdentityPublic> members(recipients.begin(), recipients.end());
+    std::vector<PublicKey> members(recipients.begin(), recipients.end());
     std::sort(members.begin(), members.end());
     for (std::size_t i = 1; i < members.size(); ++i) {
         if (sodium_memcmp(members[i - 1].data(), members[i].data(), members[i].size()) == 0)
@@ -325,19 +411,18 @@ Error create_file_offer(const Identity& sender,
 
     std::array<std::uint8_t, 32> content_key{};
     randombytes_buf(content_key.data(), content_key.size());
-    std::array<std::uint8_t, 32> sender_sk{};
-    err = identity_curve_secret(sender, sender_sk);
 
     FileOffer offer;
     offer.manifest.version = k_version;
     offer.manifest.transfer = transfer;
     offer.manifest.room = room;
     offer.manifest.sender = sender.public_key();
+    offer.manifest.sender_file = sender_file_key.public_key();
     offer.manifest.name = std::move(name);
     offer.manifest.media_type = std::move(media_type);
     offer.manifest.size = plaintext.size();
     offer.manifest.chunk_size = chunk_size;
-    offer.manifest.revision = 1;
+    offer.manifest.revision = revision;
     offer.chunks.resize(static_cast<std::size_t>(chunk_count));
     offer.manifest.chunk_hashes.resize(static_cast<std::size_t>(chunk_count));
 
@@ -364,14 +449,12 @@ Error create_file_offer(const Identity& sender,
         err = hash_bytes(plaintext, offer.manifest.content_hash);
 
     offer.seals.reserve(members.size());
-    for (const IdentityPublic& member : members) {
+    for (const PublicKey& member : members) {
         if (err)
             break;
         RecipientSeal seal;
         seal.recipient = member;
         randombytes_buf(seal.nonce.data(), seal.nonce.size());
-        std::array<std::uint8_t, 32> member_pk{};
-        err = curve_public(member, member_pk);
         std::vector<std::uint8_t> payload;
         payload.reserve(k_box_payload);
         append_bytes(payload, k_key_magic);
@@ -382,10 +465,10 @@ Error create_file_offer(const Identity& sender,
         append_bytes(payload, content_key);
         seal.box.resize(k_box_bytes);
         if (!err && crypto_box_easy(seal.box.data(), payload.data(), payload.size(),
-                                    seal.nonce.data(), member_pk.data(), sender_sk.data()) != 0)
+                                    seal.nonce.data(), member.data(),
+                                    sender_file_key.secret_.data()) != 0)
             err = Error::make(ErrorCode::CryptoUnavailable, "recipient seal failed");
         wipe_bytes(payload.data(), payload.size());
-        wipe_bytes(member_pk.data(), member_pk.size());
         if (!err)
             offer.seals.push_back(std::move(seal));
     }
@@ -397,7 +480,6 @@ Error create_file_offer(const Identity& sender,
         err = sender.sign(body, offer.manifest.signature);
     }
     wipe_bytes(content_key.data(), content_key.size());
-    wipe_bytes(sender_sk.data(), sender_sk.size());
     wipe_bytes(body.data(), body.size());
     if (err)
         return err;
@@ -455,6 +537,7 @@ Error decode_file_offer(std::span<const std::uint8_t> bytes, FileOffer& out) {
     if (!take_array(bytes, pos, offer.manifest.transfer)
         || !take_array(bytes, pos, offer.manifest.room)
         || !take_array(bytes, pos, offer.manifest.sender)
+        || !take_array(bytes, pos, offer.manifest.sender_file)
         || !take_u16(bytes, pos, name_len)
         || !take(bytes, pos, name_len, name)
         || !take_u16(bytes, pos, media_len)
@@ -535,7 +618,7 @@ void FileInbox::wipe() noexcept {
     open_ = false;
 }
 
-FileInbox FileInbox::open(Identity recipient, const FileManifest& manifest,
+FileInbox FileInbox::open(FileKey recipient, const FileManifest& manifest,
                           std::span<const RecipientSeal> seals, Error& err) {
     err = {};
     FileInbox inbox;
@@ -549,7 +632,8 @@ FileInbox FileInbox::open(Identity recipient, const FileManifest& manifest,
         err = verify_err;
         return inbox;
     }
-    if (Error key_err = open_content_key(recipient, manifest, seals, inbox.key_)) {
+    if (Error key_err = open_content_key(recipient.public_key(), recipient.secret_, manifest, seals,
+                                         inbox.key_)) {
         err = key_err;
         return inbox;
     }
@@ -560,7 +644,7 @@ FileInbox FileInbox::open(Identity recipient, const FileManifest& manifest,
     return inbox;
 }
 
-FileInbox FileInbox::resume(Identity recipient, const FileManifest& manifest,
+FileInbox FileInbox::resume(FileKey recipient, const FileManifest& manifest,
                             std::span<const RecipientSeal> seals, FileSnapshot snapshot, Error& err) {
     FileInbox inbox = open(std::move(recipient), manifest, seals, err);
     if (err)
@@ -596,9 +680,12 @@ FileInbox FileInbox::resume(Identity recipient, const FileManifest& manifest,
             inbox.wipe();
             return FileInbox{};
         }
-        inbox.pieces_[i] = std::move(snapshot.plaintext[i]);
+        inbox.pieces_[i] = snapshot.plaintext[i];
+        wipe_bytes(snapshot.plaintext[i].data(), snapshot.plaintext[i].size());
+        snapshot.plaintext[i].clear();
         inbox.have_[i] = 1;
     }
+    snapshot.wipe();
     return inbox;
 }
 

@@ -128,11 +128,29 @@ int run_channel_checks(Check& check) {
         std::vector<std::uint8_t> second;
         p.initiator.seal(bytes_of("zero"), "application/json", first);
         p.initiator.seal(bytes_of("one"), "application/json", second);
-        auto e1 = p.responder.open(second, "application/json", opened);
-        const bool second_ok = !e1 && text_of(opened) == "one";
+        auto early = p.responder.open(second, "application/json", opened);
+        const bool held = early.code == ErrorCode::Stale && opened.empty();
         auto e0 = p.responder.open(first, "application/json", opened);
-        check(second_ok && !e0 && text_of(opened) == "zero",
-              "accept bounded out-of-order delivery", e0.message);
+        const bool zero_ok = !e0 && text_of(opened) == "zero";
+        auto e1 = p.responder.open(second, "application/json", opened);
+        check(held && zero_ok && !e1 && text_of(opened) == "one",
+              "sequence 0 is required before the replay window moves",
+              held ? e0.message : error_code_name(early.code));
+    }
+    {
+        auto p = deterministic_pair("/v1/chat/completions|reorder", test_session(12), err);
+        std::vector<std::uint8_t> zero;
+        std::vector<std::uint8_t> one;
+        std::vector<std::uint8_t> two;
+        p.initiator.seal(bytes_of("zero"), "application/json", zero);
+        p.initiator.seal(bytes_of("one"), "application/json", one);
+        p.initiator.seal(bytes_of("two"), "application/json", two);
+        auto e0 = p.responder.open(zero, "application/json", opened);
+        auto e2 = p.responder.open(two, "application/json", opened);
+        const bool two_ok = !e2 && text_of(opened) == "two";
+        auto e1 = p.responder.open(one, "application/json", opened);
+        check(!e0 && two_ok && !e1 && text_of(opened) == "one",
+              "accept bounded reordering after sequence 0", e1.message);
     }
     {
         auto p = deterministic_pair("/v1/chat/completions|stale", test_session(8), err);
@@ -140,9 +158,22 @@ int run_channel_checks(Check& check) {
         for (auto& frame : frames)
             p.initiator.seal(bytes_of("x"), "application/json", frame);
         auto newest = p.responder.open(frames.back(), "application/json", opened);
-        err = p.responder.open(frames.front(), "application/json", opened);
-        check(!newest && err.code == ErrorCode::Stale, "reject frame outside replay window",
-              error_code_name(err.code));
+        const bool held = newest.code == ErrorCode::Stale && opened.empty();
+        auto first = p.responder.open(frames.front(), "application/json", opened);
+        check(held && !first && text_of(opened) == "x",
+              "a high sequence before 0 does not pin the window",
+              held ? first.message : error_code_name(newest.code));
+    }
+    {
+        auto p = deterministic_pair("/v1/chat/completions|gap", test_session(13), err);
+        std::vector<std::vector<std::uint8_t>> frames(66);
+        for (auto& frame : frames)
+            p.initiator.seal(bytes_of("x"), "application/json", frame);
+        auto first = p.responder.open(frames.front(), "application/json", opened);
+        auto jumped = p.responder.open(frames.back(), "application/json", opened);
+        err = p.responder.open(frames[1], "application/json", opened);
+        check(!first && !jumped && err.code == ErrorCode::Stale,
+              "reject frame outside replay window", error_code_name(err.code));
     }
     {
         auto p = deterministic_pair("/v1/chat/completions|empty", test_session(9), err);
@@ -179,6 +210,8 @@ int run_channel_checks(Check& check) {
         const bool ok = decode_base64(encoded, decoded, err);
         check(ok && decoded == key.public_key(), "strict public-key base64 round trip", err.message);
     }
+    check(!k_channel_ratchet && k_first_sequence == 0 && k_replay_window == 64,
+          "one channel key, sequence 0, then a 64-frame window");
     return 0;
 #endif
 }

@@ -1,5 +1,6 @@
 #include "commands.hpp"
 
+#include "pm/encryption/channel.hpp"
 #include "pm/encryption/features.hpp"
 #include "pm/encryption/policy.hpp"
 
@@ -18,6 +19,10 @@ int run_capabilities() {
                      {"handshake_property", "pinned-online"},
                      {"identity_hiding", false},
                      {"channel_key", "one-for-process"},
+                     {"ratchet", k_channel_ratchet},
+                     {"history", "out-of-channel"},
+                     {"replay_window", k_replay_window},
+                     {"replay_rule", "sequence-0-then-window-64"},
                      {"broker", false},
                      {"room_broker", "in-process-v1"},
                      {"pairing", "fingerprint-v1"},
@@ -26,8 +31,14 @@ int run_capabilities() {
                      {"cipher", "XChaCha20-Poly1305"},
                      {"key_agreement", "libsodium-crypto_kx-X25519"},
                      {"frame", "PME2/v1"},
-                     {"replay_window", 64},
                      {"file_transfer", "sealed-manifest-v1"},
+                     {"audio_frame", "PMA1/v1"},
+                     {"video_frame", "PMV1/v1"},
+                     {"media_transport", false},
+                     {"media_loss", "gap-within-window-64"},
+                     {"file_key", "separate-x25519"},
+                     {"file_key_is_identity", false},
+                     {"removal_revokes_ciphertext", false},
                      {"libsignal", feature_libsignal},
                      {"openmls", feature_openmls},
                      {"policies", {

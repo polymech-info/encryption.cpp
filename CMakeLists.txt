@@ -71,10 +71,16 @@ set(PM_ENCRYPTION_LIB_SOURCES
   src/identity.cpp
   src/policy.cpp
   src/file.cpp
+  src/media_frame.cpp
+  src/audio.cpp
+  src/video.cpp
   src/room/pairing.cpp
   src/room/broker.cpp)
 if(PM_ENCRYPTION_LIVE_SESSION)
   list(APPEND PM_ENCRYPTION_LIB_SOURCES src/handshake.cpp)
+endif()
+if(PM_ENCRYPTION_LIBSIGNAL)
+  list(APPEND PM_ENCRYPTION_LIB_SOURCES src/signal_session.cpp)
 endif()
 add_library(pm-encryption-lib STATIC ${PM_ENCRYPTION_LIB_SOURCES})
 add_library(pm::encryption ALIAS pm-encryption-lib)
@@ -89,6 +95,12 @@ target_compile_definitions(pm-encryption-lib PUBLIC
   PM_ENCRYPTION_UNAUTHENTICATED_KX=${PM_ENCRYPTION_UNAUTHENTICATED_KX_DEF}
   PM_ENCRYPTION_LIVE_SESSION=${PM_ENCRYPTION_LIVE_SESSION_DEF})
 target_link_libraries(pm-encryption-lib PUBLIC sodium)
+if(PM_ENCRYPTION_LIBSIGNAL)
+  add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../libsignal"
+                   "${CMAKE_CURRENT_BINARY_DIR}/pm-libsignal"
+                   EXCLUDE_FROM_ALL)
+  target_link_libraries(pm-encryption-lib PUBLIC pm-signal)
+endif()
 
 if(NOT CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   if(NOT TARGET pm-commons-lib)
@@ -140,6 +152,10 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     cli/http_command.cpp
     cli/chat_harness.cpp
     cli/room_harness.cpp
+    cli/vectors.cpp
+    cli/fuzz.cpp
+    cli/signal_room.cpp
+    cli/media_room.cpp
     cli/policy_command.cpp)
   if(PM_ENCRYPTION_LIVE_SESSION)
     list(APPEND PM_ENCRYPTION_CLI_SOURCES cli/handshake_checks.cpp)
@@ -178,6 +194,13 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   endif()
   if(PM_ENCRYPTION_HTTP_HARNESS)
     target_link_libraries(pm-encryption PRIVATE httplib::httplib)
+  endif()
+  if(PM_ENCRYPTION_LIBSIGNAL AND WIN32)
+    add_custom_command(TARGET pm-encryption POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              "$<TARGET_FILE:pm-signal>"
+              "$<TARGET_FILE_DIR:pm-encryption>"
+      VERBATIM)
   endif()
   target_compile_features(pm-encryption PRIVATE cxx_std_20)
   if(MSVC)

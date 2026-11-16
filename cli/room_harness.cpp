@@ -120,12 +120,16 @@ int run_room_harness(const std::string& text, LogSink& log) {
     pm::room::Invite invite;
     if (!err)
         err = broker.invite(alice, room_id, bob.public_key(), pm::room::k_grant_chat, invite);
-    pm::room::Invite media;
-    const bool media_rejected = !err
-        && static_cast<bool>(broker.invite(alice, room_id, bob.public_key(),
-                                           pm::room::k_grant_audio | pm::room::k_grant_video
-                                               | pm::room::k_grant_files,
-                                           media));
+    pm::room::Invite files_invite;
+    const bool files_rejected = !err
+        && broker.invite(alice, room_id, bob.public_key(), pm::room::k_grant_files, files_invite).code
+            == ErrorCode::InvalidArgument;
+    pm::room::Invite media_invite;
+    Error media_err = err ? err
+                          : broker.invite(alice, room_id, bob.public_key(),
+                                          pm::room::k_grant_audio | pm::room::k_grant_video, media_invite);
+    const bool media_separate = !media_err && (media_invite.grants & pm::room::k_grant_audio) != 0
+        && (media_invite.grants & pm::room::k_grant_video) != 0;
     if (!err)
         err = broker.join(bob, invite, room);
     pm::room::Room second;
@@ -237,7 +241,7 @@ int run_room_harness(const std::string& text, LogSink& log) {
 
     const bool grants_chat_only = paired.trust == pm::room::Trust::Paired && paired.grants == pm::room::k_grant_chat
         && room.members.size() == 2;
-    const bool ok = mismatch && substituted_rejected && media_rejected && invite_reused && relayed_chat
+    const bool ok = mismatch && substituted_rejected && files_rejected && media_separate && invite_reused && relayed_chat
         && plaintext_hidden && tamper_rejected && manifest_hidden && outsider_rejected && grants_chat_only
         && !err;
     log_info(log, "room", ok ? "passed" : "failed");
@@ -258,7 +262,8 @@ int run_room_harness(const std::string& text, LogSink& log) {
                      {"audio", false},
                      {"video", false},
                      {"files", false},
-                     {"media_grants_rejected", media_rejected},
+                     {"files_grant_rejected", files_rejected},
+                     {"media_grant_separate", media_separate},
                      {"invite_reused_rejected", invite_reused},
                      {"outsider_rejected", outsider_rejected},
                      {"relayed_chat", relayed_chat},

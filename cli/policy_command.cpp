@@ -87,11 +87,15 @@ int run_policy(const std::string& name, LogSink& log) {
             return 1;
         return finish("unauthenticated_kx", check, log);
     }
-    if (name == "signal" || name == "mls") {
-        const PolicyId id = name == "signal" ? PolicyId::Signal : PolicyId::Mls;
-        if (!policy_enabled(id))
-            return disabled(policy_id_name(id), std::string(policy_id_name(id)) + " session policy is not compiled", log);
-        return disabled(policy_id_name(id), std::string(policy_id_name(id)) + " session policy has no isolated suite yet", log);
+    if (name == "signal") {
+        if (!policy_enabled(PolicyId::Signal))
+            return disabled("signal", "signal session policy is not compiled", log);
+        return run_signal_room("signal-room", log);
+    }
+    if (name == "mls") {
+        if (!policy_enabled(PolicyId::Mls))
+            return disabled("mls", "mls session policy is not compiled", log);
+        return disabled("mls", "mls session policy has no isolated suite yet", log);
     }
     log_warn(log, "policy", "unknown policy");
     std::cout << nlohmann::json{{"ok", false},
