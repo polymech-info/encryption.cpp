@@ -1,0 +1,17 @@
+{
+  "name": "@polymech/pm-encryption",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Standalone E2EE library and pm-encryption protocol test CLI.",
+  "scripts": {
+    "configure": "node ../../scripts/cmake.mjs --preset dev",
+    "configure:release": "node ../../scripts/cmake.mjs --preset release",
+    "build:cpp": "npm run configure && node ../../scripts/cmake.mjs --build --preset dev --target pm-encryption",
+    "build:cpp-fast": "node ../../scripts/cmake.mjs --build --preset dev --target pm-encryption",
+    "build:cpp:release": "npm run configure:release && node ../../scripts/cmake.mjs --build --preset release --target pm-encryption",
+    "test": "node tests/run.mjs",
+    "test:core": "node tests/test-core.mjs",
+    "test:build": "npm run build:cpp && npm test"
+  }
+}
