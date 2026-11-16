@@ -2,13 +2,17 @@
 
 Standalone C++20 security protocol library and test CLI for PolyMech/Tanit.
 
-**Status:** standalone library and CLI. Windows tests cover the secure channel,
-the pinned-identity handshake, and both HTTP harness modes. Not integrated
-into Tanit. Linux and Android are not yet built.  
-**Next:** transport-neutral file manifests and chunks, still inside this
-package.  
-**Sibling ceiling:** none for a standalone build. A host may link
-`commons.cpp` and nothing else from `packages/`.  
+**Status:** `live_session` is a pinned online channel with one key for the
+process. `group-file` seals one content key per recipient and stores
+ciphertext on a `vfs.cpp` mount. Neither is production E2EE. The reading of
+what actually holds is `docs/security-assessment.md`. Signal and MLS stay
+compiled out. Linux and Android are not yet built.  
+**Next:** production gates in `docs/security-assessment.md`. `chat-harness` is
+the direct loopback pair. `room-harness` is the in-process broker Android
+will host later (`docs/room-broker.md`). Tailscale does not replace pairing.  
+**Sibling ceiling:** the library links no sibling. The standalone CLI links
+`vfs.cpp` for the file scenario and uses that package's bundled path
+sanitizer, so this build does not pull in `commons.cpp`.  
 **License:** BSD-3-Clause for this package. Vendored dependencies retain their
 own licenses.
 
@@ -41,12 +45,25 @@ The design context is in `../../docs/phone-mesh.md`.
 - move-only key/channel types with secret-key clearing;
 - deterministic seeded identities for protocol tests.
 
-`Identity` is a long-term Ed25519 signing key. `Handshake` is a three-message
-SIGMA-I exchange for peers that have already pinned each other's identity. It
-binds version, suite, context, session id, both identities, and both X25519
-ephemerals into the signatures and into HKDF-SHA256 channel keys. It is the
-online session setup. It is not Signal: Signal's PQXDH-plus-Double-Ratchet
-session is the later, durable, offline one-to-one layer.
+`Identity` and `Handshake` implement the `live_session` policy. The handshake
+is three messages for peers that have already pinned each other's Ed25519
+identity. The wire label is `sigma-i-v1`. Identities travel in the clear, so
+this is not SIGMA identity protection; SA-1 in the assessment records that.
+The signatures bind version, suite, context, session id, both identities, and
+both X25519 ephemerals, and HKDF-SHA256 derives one channel key in each
+direction. Those keys encrypt every frame until the process exits.
+
+`signal` is a separate session policy: PQXDH, the Double Ratchet, and Sesame.
+It is listed by `pm-encryption policy list` and stays disabled. Turning it on
+requires `-DPM_ENCRYPTION_LIBSIGNAL=ON` and the vendored sibling.
+
+`FileOffer` is the group-file envelope. The sender encrypts the bytes once
+with a random content key, signs the manifest, and seals that key to each
+recipient identity. A chat message would carry the manifest, not the file.
+This is not MLS: there is no group ratchet, and the long-term identity key can
+open every file sealed to that member. `pm-encryption scenario group-file`
+puts the ciphertext on a `vfs.cpp` room mount and the plaintext only in the
+recipient home, after every chunk and the content hash check.
 
 The channel API does not contain chat, HTTP, SSE, file, or media concepts.
 Those are vertical protocols which pass bounded payload bytes, a content type,
@@ -57,15 +74,25 @@ generic channel over real HTTP/SSE:
 
 ```text
 pm-encryption capabilities
+pm-encryption policy list
+pm-encryption policy live
 pm-encryption selftest
 pm-encryption identity --seed <64 hex chars>
 pm-encryption scenario tanit-chat-wifi
+pm-encryption scenario group-file
+pm-encryption chat-harness --text "hello"
+pm-encryption room-harness --text "hello"
 pm-encryption roundtrip --text "hello"
 pm-encryption server --host 127.0.0.1 --port 0 --once
 pm-encryption client --url http://127.0.0.1:<port> --text "hello"
 pm-encryption server --authenticated --identity-seed <hex> --peer-key <base64>
 pm-encryption client --authenticated --identity-seed <hex> --peer-key <base64> --url ... --text "hello"
 ```
+
+`chat-harness` is the desktop tool: two pinned endpoints, loopback only, a
+16 KiB frame cap, and no chat bytes until both sides have finished message 3.
+`server` and `client` remain the broader protocol tests, including the
+unauthenticated framing mode.
 
 The server/client harness proves encrypted JSON requests and independently
 encrypted SSE events over real HTTP, including `[DONE]`. It uses a short-lived,
@@ -74,7 +101,7 @@ single-use ephemeral server challenge and does not log the prompt.
 Without `--authenticated`, the harness reports `authenticated_peer:false` and
 `mode:unauthenticated-kx`. That mode is a test of framing only: its ephemeral
 exchange is vulnerable to an active man-in-the-middle. `--authenticated`
-switches the same binary to the pinned SIGMA-I handshake and reports
+switches the same binary to the pinned handshake and reports
 `authenticated_peer:true`. The caller supplies both the local seed and the
 peer's already-pinned public key. The harness still does not store identities
 or decide trust.
@@ -86,9 +113,11 @@ and the HTTP mode is also a CLI flag.
 
 | CMake option | Default | Effect |
 |---|---|---|
+| `PM_ENCRYPTION_LIVE_SESSION` | `ON` | Low-level online policy: pinned handshake and one channel key. `policy live` runs its isolated suite |
 | `PM_ENCRYPTION_LIBSODIUM` | `ON` | X25519, Ed25519, HKDF, and XChaCha20-Poly1305. `OFF` is rejected until another profile exists |
 | `PM_ENCRYPTION_UNAUTHENTICATED_KX` | `ON` | Compiles `SecureChannel::initiator/responder`, which do not bind a device identity |
 | `PM_ENCRYPTION_HTTP_HARNESS` | `ON` | Compiles the standalone HTTP/SSE harness |
+| `PM_ENCRYPTION_VFS` | `ON` | Links `packages/vfs.cpp` into `scenario group-file`. The library itself does not link it |
 | `PM_ENCRYPTION_LIBSIGNAL` | `OFF` | AGPL-3.0 libsignal adapter. Accepted, and fail-closed until `packages/libsignal` is vendored |
 | `PM_ENCRYPTION_OPENMLS` | `OFF` | Group-messaging adapter. Fail-closed until `packages/openmls` is vendored |
 
@@ -107,8 +136,8 @@ Not implemented yet:
 - crash-safe persistent counters or ratchet state;
 - the libsignal adapter itself, offline messages, and multi-device convergence;
 - MLS groups;
-- files or media;
-- any Tanit, Android, VFS, or WebRTC integration.
+- a separate file key, so attachments are not sealed to the chat identity;
+- any Tanit product UI, broker, P2P path, Android, or WebRTC integration.
 
 ## Goals
 
@@ -388,10 +417,12 @@ Hard cases:
 
 ### Layer 3 — Authenticated session and envelopes
 
-The current online profile is `sigma-i-v1`: Ed25519 identity signatures over a
-canonical transcript, X25519 `crypto_kx`, and HKDF-SHA256 into
-`SecureChannel`. Signal remains Layer 6 because its session outlives one
-connection and must decrypt messages while the peer is offline.
+The current online profile is a pinned three-message handshake. Capabilities
+report the wire label `sigma-i-v1`: Ed25519 signatures over a canonical
+transcript, X25519 `crypto_kx`, and HKDF-SHA256 into `SecureChannel`. The
+label is older than the property; see SA-1. Signal remains Layer 6 because
+its session outlives one connection and must decrypt messages while the peer
+is offline.
 
 Role binding, the transcript hash, version refusal, and the channel replay
 window are in this profile. Still to add on this layer:
@@ -407,7 +438,8 @@ device/room/transfer context.
 
 ### Layer 4 — File cryptography
 
-This is the first product-ready feature:
+The envelope below exists and is covered by `scenario group-file`. It is not
+product-ready; SA-3 and SA-12 say why:
 
 - signed and encrypted manifest;
 - independent random content key per file version;
@@ -693,6 +725,10 @@ npm run build:cpp
 npm run build:cpp-fast
 npm test
 npm run test:core
+npm run test:policy
+npm run test:file
+npm run test:harness
+npm run test:room
 npm run test:http
 npm run test:auth
 ```
@@ -723,8 +759,10 @@ use explicit CMake options:
 
 ```text
 PM_ENCRYPTION_LIBSODIUM=ON
+PM_ENCRYPTION_LIVE_SESSION=ON
 PM_ENCRYPTION_UNAUTHENTICATED_KX=ON
 PM_ENCRYPTION_HTTP_HARNESS=ON
+PM_ENCRYPTION_VFS=ON
 PM_ENCRYPTION_LIBSIGNAL=OFF
 PM_ENCRYPTION_OPENMLS=OFF
 ```
@@ -733,6 +771,13 @@ Feature definitions are private unless they affect a public type. Public API
 types must not change shape merely because one optional backend is absent.
 
 ## Security review gates
+
+`docs/security-assessment.md` is the internal reading of the code we have.
+Industrial reviews start from the adversary and the written design, then the
+code, then fuzzing and a second implementation, and only then a reviewer who
+did not write it. We have the adversary, a code reading, and deterministic
+tests. The written design is that assessment, which is not an independent
+review. Gates 5, 9, and 10 are open.
 
 No layer is called complete until:
 
@@ -747,49 +792,63 @@ No layer is called complete until:
 9. A reviewer independent of the implementation checks protocol composition.
 10. Product documentation states metadata and compromise limitations.
 
-Before production pairing, file exchange, Signal, MLS, or media-key work, obtain
-an external cryptographic review of the composed protocol and storage behavior.
-A reviewed primitive does not make an unreviewed composition secure.
+A reviewed primitive does not make an unreviewed composition secure. The
+desktop harness does not close these gates.
 
 ## Delivered
 
-Windows standalone, no sibling packages linked:
+Windows standalone. The library links no sibling; the CLI links `vfs.cpp` for `group-file`:
 
 - [x] `SecureChannel` frames, replay window, and typed failures
-- [x] Ed25519 `Identity` and SIGMA-I `Handshake` into that channel
+- [x] `live_session` policy, isolated by `pm-encryption policy live`
+- [x] Ed25519 `Identity` and a pinned three-message handshake into that channel
 - [x] CLI split by feature, host-passed `LogSink`, `--log-level`
 - [x] HTTP/SSE harness in unauthenticated and `--authenticated` modes
 - [x] CMake feature flags, including fail-closed libsignal and OpenMLS
-- [x] `npm test` covers core, HTTP, and authenticated handshake
+- [x] `group-file` scenario: sealed manifest, vfs room mount, hostile chunks, resume
+- [x] `chat-harness`: pinned loopback desktop chat, 16 KiB cap, no broker
+- [x] `pm::room` broker: fingerprint pairing, single-use invite, opaque relay
+- [x] `npm test` covers core, `policy live`, group-file, HTTP, and authenticated handshake
 
 ## Next
 
-Stay standalone. The next deliverable is file cryptography, still with no
-sibling package:
-
-```text
-pm-encryption selftest
-  -> signed manifest
-  -> encrypted empty, one-chunk, and multi-chunk payloads
-  -> hostile delivery: duplicate, missing, reordered, corrupt
-  -> in-memory faulting state store
-  -> resume and final content verification
-```
-
-Two deterministic peers in one process come before two CLI processes. Pairing
-storage, libsignal, MLS, VFS, and Tanit stay behind that file suite.
+The desktop harness is in place. Production Tanit chat stays behind the list
+below: a stolen channel key still reads the whole session, files are still
+sealed to the signing identity, and there is still no broker.
 
 ## Todos
 
-- [ ] File manifest, content key, and authenticated chunks
-- [ ] Fault-injecting in-memory store for crash and rollback cases
-- [ ] Resume across a new channel with the same transfer id
-- [ ] Linux and Android NDK configure of this package
-- [ ] Vendoring `packages/libsignal` only after the file suite is stable
-- [ ] Host embedding, with `commons.cpp` as the only sibling
+Detail and code references are in `docs/security-assessment.md`.
+
+Desktop harness, `pm-encryption chat-harness`:
+
+- [x] SA-1 The harness and capabilities say `pinned-online`. The wire label stays `sigma-i-v1`
+- [x] SA-4 Loopback only, both identities pinned in the process, unauthenticated route refused
+- [x] SA-8 Chat is rejected until message 3 has finished on both sides
+- [x] SA-9 The reported frame context is the transcript hash
+- [x] SA-13 Binds loopback and caps a chat frame at 16 KiB
+- [x] The result states one channel key and no broker
+
+Before any production claim:
+
+- [ ] SA-2 A stolen channel key reads the whole session; ratchet, or say so in the product and keep history elsewhere
+- [ ] SA-3 Separate file keys from the Ed25519 signing identity
+- [ ] SA-6 Fuzz the handshake, frame, and file parsers
+- [ ] SA-7 Choose the replay rule for a transport that reorders or drops
+- [ ] SA-10 Delete staging plaintext and wipe file snapshots
+- [ ] SA-11 Lock the "one content key, one plaintext per chunk index" invariant with a test
+- [ ] SA-12 Member removal does not revoke an old file; say so, or change the envelope
+- [ ] SA-14 Publish handshake and file vectors a second implementation can match
+- [ ] SA-15 External review of this composition
+- [ ] SA-16 Configure on Linux and the Android NDK
+- [ ] SA-17 The in-process broker is only the loopback stand-in. A listening broker, tailnet bind, or P2P path is still a new adversary
+- [ ] `signal` session policy, behind `PM_ENCRYPTION_LIBSIGNAL`, after the file key split
+- [ ] Host embedding, with `commons.cpp` when the host image already has it
 
 ## References
 
+- This package's security assessment: `docs/security-assessment.md`
+- Room broker and Tailscale: `docs/room-broker.md`
 - Phone mesh design: `../../docs/phone-mesh.md`
 - Existing P2P notes: `../commons.cpp/docs/security/p2p.md`
 - Commons package: `../commons.cpp/README.md`

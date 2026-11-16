@@ -1,6 +1,9 @@
 #include "http_harness.hpp"
 
+#include "pm/encryption/features.hpp"
+#if PM_ENCRYPTION_LIVE_SESSION
 #include "pm/encryption/handshake.hpp"
+#endif
 
 #include <httplib.h>
 #include <nlohmann/json.hpp>
@@ -237,15 +240,25 @@ private:
 
 } // namespace
 
+#if PM_ENCRYPTION_LIVE_SESSION
 int run_authenticated_http_server(const std::string& host, int port, bool once,
                                    const HttpAuth& auth, LogSink& log);
 int run_authenticated_http_client(const std::string& base_url, const std::string& prompt,
                                   bool tamper, const HttpAuth& auth, LogSink& log);
+#endif
 
 int run_http_server(const std::string& host, int port, bool once, const HttpAuth& auth,
                     LogSink& log) {
-    if (auth.enabled)
+    if (auth.enabled) {
+#if PM_ENCRYPTION_LIVE_SESSION
         return run_authenticated_http_server(host, port, once, auth, log);
+#else
+        log_warn(log, "policy", "live_session disabled");
+        std::cout << failure("feature_disabled", "live session policy is not compiled").dump()
+                  << std::endl;
+        return 1;
+#endif
+    }
     log_info(log, "http", "mode=unauthenticated-kx");
     httplib::Server server;
     ChallengeStore challenges;
@@ -381,8 +394,16 @@ int run_http_server(const std::string& host, int port, bool once, const HttpAuth
 
 int run_http_client(const std::string& base_url, const std::string& prompt, bool tamper,
                     const HttpAuth& auth, LogSink& log) {
-    if (auth.enabled)
+    if (auth.enabled) {
+#if PM_ENCRYPTION_LIVE_SESSION
         return run_authenticated_http_client(base_url, prompt, tamper, auth, log);
+#else
+        log_warn(log, "policy", "live_session disabled");
+        std::cout << failure("feature_disabled", "live session policy is not compiled").dump()
+                  << "\n";
+        return 1;
+#endif
+    }
     log_info(log, "http", "client mode=unauthenticated-kx");
     HttpEndpoint endpoint;
     if (!parse_http_url(base_url, endpoint)) {
@@ -504,6 +525,7 @@ int run_http_client(const std::string& base_url, const std::string& prompt, bool
     return ok ? 0 : 1;
 }
 
+#if PM_ENCRYPTION_LIVE_SESSION
 int run_authenticated_http_server(const std::string& host, int port, bool once,
                                   const HttpAuth& auth, LogSink& log) {
     log_info(log, "http", "mode=authenticated-handshake");
@@ -869,5 +891,6 @@ int run_authenticated_http_client(const std::string& base_url, const std::string
               << "\n";
     return ok ? 0 : 1;
 }
+#endif
 
 } // namespace pm::encryption::cli

@@ -40,6 +40,7 @@ enum class ErrorCode {
     IdentityMismatch,
     BadSignature,
     UnexpectedState,
+    NotRecipient,
 };
 
 struct Error {

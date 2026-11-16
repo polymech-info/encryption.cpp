@@ -15,12 +15,25 @@ int main(int argc, char** argv) {
 
     auto* capabilities = app.add_subcommand("capabilities", "Print compiled protocol support");
     auto* selftest = app.add_subcommand("selftest", "Run deterministic E2EE protocol checks");
+    auto* policy = app.add_subcommand("policy", "Run one isolated session policy");
+    std::string policy_name;
+    policy->add_option("name", policy_name, "list, live, unauthenticated-kx, signal, or mls")->required();
     auto* scenario = app.add_subcommand("scenario", "Run a named deterministic scenario");
     std::string scenario_name;
     scenario->add_option("name", scenario_name)->required();
     auto* identity = app.add_subcommand("identity", "Print the public key for an identity seed");
     std::string identity_seed;
     identity->add_option("--seed", identity_seed, "64 hex characters")->required();
+    auto* chat_harness = app.add_subcommand(
+        "chat-harness", "Loopback desktop chat between two pinned endpoints");
+    std::string harness_host = "127.0.0.1";
+    std::string harness_text = "hello";
+    chat_harness->add_option("--host", harness_host, "127.0.0.1, localhost, or ::1");
+    chat_harness->add_option("--text", harness_text, "Chat bytes. Not printed.");
+    auto* room_harness = app.add_subcommand(
+        "room-harness", "In-process room broker: pair, invite, and relay chat");
+    std::string room_text = "hello";
+    room_harness->add_option("--text", room_text, "Chat bytes. Not printed.");
     auto* roundtrip = app.add_subcommand("roundtrip", "Round-trip one in-memory payload");
     std::string roundtrip_text;
     roundtrip->add_option("--text", roundtrip_text)->required();
@@ -70,10 +83,16 @@ int main(int argc, char** argv) {
         return pm::encryption::cli::run_capabilities();
     if (*selftest)
         return pm::encryption::cli::run_selftest(log);
+    if (*policy)
+        return pm::encryption::cli::run_policy(policy_name, log);
     if (*scenario)
         return pm::encryption::cli::run_scenario(scenario_name, log);
     if (*identity)
         return pm::encryption::cli::run_identity(identity_seed);
+    if (*chat_harness)
+        return pm::encryption::cli::run_chat_harness(harness_host, harness_text, log);
+    if (*room_harness)
+        return pm::encryption::cli::run_room_harness(room_text, log);
     if (*roundtrip)
         return pm::encryption::cli::run_roundtrip(roundtrip_text);
     if (*server) {

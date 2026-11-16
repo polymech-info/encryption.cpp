@@ -13,6 +13,10 @@ option(PM_ENCRYPTION_OPENMLS "Enable the OpenMLS group adapter" OFF)
 option(PM_ENCRYPTION_HTTP_HARNESS "Build the standalone HTTP/SSE harness" ON)
 option(PM_ENCRYPTION_UNAUTHENTICATED_KX
   "Allow SecureChannel without a pinned device-identity handshake" ON)
+option(PM_ENCRYPTION_LIVE_SESSION
+  "Enable the low-level online policy: pinned identity handshake and one channel key" ON)
+option(PM_ENCRYPTION_VFS
+  "Link packages/vfs.cpp into the group-file scenario" ON)
 
 if(NOT PM_ENCRYPTION_LIBSODIUM)
   message(FATAL_ERROR "PM_ENCRYPTION_LIBSODIUM=OFF is not a supported profile yet")
@@ -31,6 +35,7 @@ set(PM_ENCRYPTION_LIBSIGNAL_DEF 0)
 set(PM_ENCRYPTION_OPENMLS_DEF 0)
 set(PM_ENCRYPTION_HTTP_HARNESS_DEF 0)
 set(PM_ENCRYPTION_UNAUTHENTICATED_KX_DEF 0)
+set(PM_ENCRYPTION_LIVE_SESSION_DEF 0)
 if(PM_ENCRYPTION_LIBSODIUM)
   set(PM_ENCRYPTION_LIBSODIUM_DEF 1)
 endif()
@@ -46,6 +51,9 @@ endif()
 if(PM_ENCRYPTION_UNAUTHENTICATED_KX)
   set(PM_ENCRYPTION_UNAUTHENTICATED_KX_DEF 1)
 endif()
+if(PM_ENCRYPTION_LIVE_SESSION)
+  set(PM_ENCRYPTION_LIVE_SESSION_DEF 1)
+endif()
 
 include(FetchContent)
 
@@ -58,10 +66,17 @@ if(NOT TARGET sodium)
   FetchContent_MakeAvailable(libsodium_cmake)
 endif()
 
-add_library(pm-encryption-lib STATIC
+set(PM_ENCRYPTION_LIB_SOURCES
   src/channel.cpp
   src/identity.cpp
-  src/handshake.cpp)
+  src/policy.cpp
+  src/file.cpp
+  src/room/pairing.cpp
+  src/room/broker.cpp)
+if(PM_ENCRYPTION_LIVE_SESSION)
+  list(APPEND PM_ENCRYPTION_LIB_SOURCES src/handshake.cpp)
+endif()
+add_library(pm-encryption-lib STATIC ${PM_ENCRYPTION_LIB_SOURCES})
 add_library(pm::encryption ALIAS pm-encryption-lib)
 target_include_directories(pm-encryption-lib
   PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
@@ -71,7 +86,8 @@ target_compile_definitions(pm-encryption-lib PUBLIC
   PM_ENCRYPTION_LIBSIGNAL=${PM_ENCRYPTION_LIBSIGNAL_DEF}
   PM_ENCRYPTION_OPENMLS=${PM_ENCRYPTION_OPENMLS_DEF}
   PM_ENCRYPTION_HTTP_HARNESS=${PM_ENCRYPTION_HTTP_HARNESS_DEF}
-  PM_ENCRYPTION_UNAUTHENTICATED_KX=${PM_ENCRYPTION_UNAUTHENTICATED_KX_DEF})
+  PM_ENCRYPTION_UNAUTHENTICATED_KX=${PM_ENCRYPTION_UNAUTHENTICATED_KX_DEF}
+  PM_ENCRYPTION_LIVE_SESSION=${PM_ENCRYPTION_LIVE_SESSION_DEF})
 target_link_libraries(pm-encryption-lib PUBLIC sodium)
 
 if(NOT CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
@@ -118,10 +134,16 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     cli/capabilities.cpp
     cli/identity_command.cpp
     cli/channel_checks.cpp
-    cli/handshake_checks.cpp
     cli/selftest.cpp
     cli/scenario.cpp
-    cli/http_command.cpp)
+    cli/file_scenario.cpp
+    cli/http_command.cpp
+    cli/chat_harness.cpp
+    cli/room_harness.cpp
+    cli/policy_command.cpp)
+  if(PM_ENCRYPTION_LIVE_SESSION)
+    list(APPEND PM_ENCRYPTION_CLI_SOURCES cli/handshake_checks.cpp)
+  endif()
   if(PM_ENCRYPTION_HTTP_HARNESS)
     if(NOT TARGET httplib::httplib)
       set(HTTPLIB_USE_ZLIB_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
@@ -141,6 +163,19 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     pm-encryption-lib
     CLI11::CLI11
     nlohmann_json::nlohmann_json)
+  if(PM_ENCRYPTION_VFS)
+    if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../vfs.cpp/CMakeLists.txt")
+      message(FATAL_ERROR "PM_ENCRYPTION_VFS=ON requires packages/vfs.cpp")
+    endif()
+    set(PM_VFS_USE_BUNDLED_SANITIZER ON)
+    add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../vfs.cpp"
+                     "${CMAKE_CURRENT_BINARY_DIR}/pm-vfs"
+                     EXCLUDE_FROM_ALL)
+    target_compile_definitions(pm-encryption PRIVATE PM_ENCRYPTION_VFS=1)
+    target_link_libraries(pm-encryption PRIVATE pm-vfs-lib)
+  else()
+    target_compile_definitions(pm-encryption PRIVATE PM_ENCRYPTION_VFS=0)
+  endif()
   if(PM_ENCRYPTION_HTTP_HARNESS)
     target_link_libraries(pm-encryption PRIVATE httplib::httplib)
   endif()

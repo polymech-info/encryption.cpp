@@ -136,6 +136,7 @@ const char* error_code_name(ErrorCode code) noexcept {
     case ErrorCode::IdentityMismatch: return "identity_mismatch";
     case ErrorCode::BadSignature: return "bad_signature";
     case ErrorCode::UnexpectedState: return "unexpected_state";
+    case ErrorCode::NotRecipient: return "not_recipient";
     }
     return "unknown";
 }

@@ -19,6 +19,12 @@
 #ifndef PM_ENCRYPTION_UNAUTHENTICATED_KX
 #define PM_ENCRYPTION_UNAUTHENTICATED_KX 0
 #endif
+#ifndef PM_ENCRYPTION_LIVE_SESSION
+#define PM_ENCRYPTION_LIVE_SESSION 0
+#endif
+#ifndef PM_ENCRYPTION_VFS
+#define PM_ENCRYPTION_VFS 0
+#endif
 
 namespace pm::encryption {
 
@@ -27,6 +33,8 @@ inline constexpr bool feature_libsignal = PM_ENCRYPTION_LIBSIGNAL != 0;
 inline constexpr bool feature_openmls = PM_ENCRYPTION_OPENMLS != 0;
 inline constexpr bool feature_http_harness = PM_ENCRYPTION_HTTP_HARNESS != 0;
 inline constexpr bool feature_unauthenticated_kx = PM_ENCRYPTION_UNAUTHENTICATED_KX != 0;
-inline constexpr bool feature_authenticated_handshake = true;
+inline constexpr bool feature_live_session = PM_ENCRYPTION_LIVE_SESSION != 0;
+inline constexpr bool feature_authenticated_handshake = feature_live_session;
+inline constexpr bool feature_vfs = PM_ENCRYPTION_VFS != 0;
 
 } // namespace pm::encryption

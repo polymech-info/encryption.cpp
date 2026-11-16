@@ -11,16 +11,17 @@ namespace pm::encryption {
  * Mutually authenticated online handshake for peers that already pinned each
  * other's Ed25519 identity.
  *
- * Three messages, in the shape of SIGMA-I:
- *   1. initiator ephemeral
- *   2. responder ephemeral and responder signature
+ * Three messages. The wire domain is sigma-i-v1, and the identities are in
+ * the clear, so this is not SIGMA identity protection:
+ *   1. initiator identity, initiator ephemeral, session id
+ *   2. responder identity, responder ephemeral, responder signature
  *   3. initiator signature
  *
  * Both signatures cover the version, suite, context, session id, both
  * identities, and both ephemerals. Channel keys are HKDF-SHA256 of the X25519
- * exchange, salted with that transcript. Identity public keys are visible to
- * the transport. This is not Signal, Noise, or TLS, and it does not create
- * trust by itself.
+ * exchange, salted with that transcript. One key in each direction then
+ * encrypts every frame for the process. This is not Signal, Noise, or TLS,
+ * and it does not create trust by itself.
  */
 class Handshake {
 public:

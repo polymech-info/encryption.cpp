@@ -19,6 +19,8 @@ check(capabilities.json?.schema === 'pm.encryption.capabilities.v1', 'capabiliti
 check(capabilities.json?.secure_channel_e2ee === true, 'generic secure channel is compiled');
 check(capabilities.json?.chat_http_sse_harness === true, 'chat HTTP/SSE vertical is compiled');
 check(capabilities.json?.libsignal === false, 'libsignal is not silently enabled');
+check(capabilities.json?.policies?.live_session === true, 'live session policy is enabled');
+check(capabilities.json?.policies?.signal === false, 'signal session policy is a separate disabled feature');
 check(capabilities.json?.authenticated_handshake === true, 'authenticated handshake is compiled');
 check(capabilities.json?.handshake === 'sigma-i-v1', 'handshake profile is sigma-i-v1');
 check(capabilities.json?.features?.unauthenticated_kx === true,

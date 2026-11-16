@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Standalone E2EE library and pm-encryption CLI. No sibling package is required to build or test. A host may link commons.cpp; that is the only allowed sibling.",
+  "description": "Standalone E2EE library and pm-encryption CLI. The library links no sibling. The CLI links vfs.cpp for the group-file scenario.",
   "scripts": {
     "configure": "node scripts/cmake.mjs --preset dev",
     "configure:release": "node scripts/cmake.mjs --preset release",
@@ -12,6 +12,10 @@
     "build:cpp:release": "npm run configure:release && node scripts/cmake.mjs --build --preset release --target pm-encryption",
     "test": "node tests/run.mjs",
     "test:core": "node tests/test-core.mjs",
+    "test:policy": "node tests/test-policy.mjs",
+    "test:file": "node tests/test-file.mjs",
+    "test:harness": "node tests/test-harness.mjs",
+    "test:room": "node tests/test-room.mjs",
     "test:http": "node tests/test-http.mjs",
     "test:auth": "node tests/test-auth.mjs",
     "test:build": "npm run build:cpp && npm test"
