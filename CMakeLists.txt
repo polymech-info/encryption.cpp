@@ -7,6 +7,46 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     LANGUAGES CXX)
 endif()
 
+option(PM_ENCRYPTION_LIBSODIUM "Enable the libsodium X25519/XChaCha profile" ON)
+option(PM_ENCRYPTION_LIBSIGNAL "Enable the AGPL-3.0 libsignal one-to-one adapter" OFF)
+option(PM_ENCRYPTION_OPENMLS "Enable the OpenMLS group adapter" OFF)
+option(PM_ENCRYPTION_HTTP_HARNESS "Build the standalone HTTP/SSE harness" ON)
+option(PM_ENCRYPTION_UNAUTHENTICATED_KX
+  "Allow SecureChannel without a pinned device-identity handshake" ON)
+
+if(NOT PM_ENCRYPTION_LIBSODIUM)
+  message(FATAL_ERROR "PM_ENCRYPTION_LIBSODIUM=OFF is not a supported profile yet")
+endif()
+if(PM_ENCRYPTION_LIBSIGNAL AND NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../libsignal/CMakeLists.txt")
+  message(FATAL_ERROR
+    "PM_ENCRYPTION_LIBSIGNAL=ON is accepted under AGPL-3.0, but packages/libsignal is not vendored yet")
+endif()
+if(PM_ENCRYPTION_OPENMLS AND NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../openmls/CMakeLists.txt")
+  message(FATAL_ERROR
+    "PM_ENCRYPTION_OPENMLS=ON requires packages/openmls, which is not vendored yet")
+endif()
+
+set(PM_ENCRYPTION_LIBSODIUM_DEF 0)
+set(PM_ENCRYPTION_LIBSIGNAL_DEF 0)
+set(PM_ENCRYPTION_OPENMLS_DEF 0)
+set(PM_ENCRYPTION_HTTP_HARNESS_DEF 0)
+set(PM_ENCRYPTION_UNAUTHENTICATED_KX_DEF 0)
+if(PM_ENCRYPTION_LIBSODIUM)
+  set(PM_ENCRYPTION_LIBSODIUM_DEF 1)
+endif()
+if(PM_ENCRYPTION_LIBSIGNAL)
+  set(PM_ENCRYPTION_LIBSIGNAL_DEF 1)
+endif()
+if(PM_ENCRYPTION_OPENMLS)
+  set(PM_ENCRYPTION_OPENMLS_DEF 1)
+endif()
+if(PM_ENCRYPTION_HTTP_HARNESS)
+  set(PM_ENCRYPTION_HTTP_HARNESS_DEF 1)
+endif()
+if(PM_ENCRYPTION_UNAUTHENTICATED_KX)
+  set(PM_ENCRYPTION_UNAUTHENTICATED_KX_DEF 1)
+endif()
+
 include(FetchContent)
 
 if(NOT TARGET sodium)
@@ -19,11 +59,19 @@ if(NOT TARGET sodium)
 endif()
 
 add_library(pm-encryption-lib STATIC
-  src/channel.cpp)
+  src/channel.cpp
+  src/identity.cpp
+  src/handshake.cpp)
 add_library(pm::encryption ALIAS pm-encryption-lib)
 target_include_directories(pm-encryption-lib
   PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_compile_features(pm-encryption-lib PUBLIC cxx_std_20)
+target_compile_definitions(pm-encryption-lib PUBLIC
+  PM_ENCRYPTION_LIBSODIUM=${PM_ENCRYPTION_LIBSODIUM_DEF}
+  PM_ENCRYPTION_LIBSIGNAL=${PM_ENCRYPTION_LIBSIGNAL_DEF}
+  PM_ENCRYPTION_OPENMLS=${PM_ENCRYPTION_OPENMLS_DEF}
+  PM_ENCRYPTION_HTTP_HARNESS=${PM_ENCRYPTION_HTTP_HARNESS_DEF}
+  PM_ENCRYPTION_UNAUTHENTICATED_KX=${PM_ENCRYPTION_UNAUTHENTICATED_KX_DEF})
 target_link_libraries(pm-encryption-lib PUBLIC sodium)
 
 if(NOT CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
@@ -62,25 +110,40 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
       GIT_SHALLOW TRUE)
     FetchContent_MakeAvailable(nlohmann_json)
   endif()
-  if(NOT TARGET httplib::httplib)
-    set(HTTPLIB_USE_ZLIB_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
-    set(HTTPLIB_REQUIRE_ZLIB OFF CACHE BOOL "" FORCE)
-    FetchContent_Declare(
-      cpp_httplib
-      GIT_REPOSITORY https://github.com/yhirose/cpp-httplib.git
-      GIT_TAG v0.16.3
-      GIT_SHALLOW TRUE)
-    FetchContent_MakeAvailable(cpp_httplib)
+
+  set(PM_ENCRYPTION_CLI_SOURCES
+    cli/main.cpp
+    cli/support.cpp
+    cli/stderr_log.cpp
+    cli/capabilities.cpp
+    cli/identity_command.cpp
+    cli/channel_checks.cpp
+    cli/handshake_checks.cpp
+    cli/selftest.cpp
+    cli/scenario.cpp
+    cli/http_command.cpp)
+  if(PM_ENCRYPTION_HTTP_HARNESS)
+    if(NOT TARGET httplib::httplib)
+      set(HTTPLIB_USE_ZLIB_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
+      set(HTTPLIB_REQUIRE_ZLIB OFF CACHE BOOL "" FORCE)
+      FetchContent_Declare(
+        cpp_httplib
+        GIT_REPOSITORY https://github.com/yhirose/cpp-httplib.git
+        GIT_TAG v0.16.3
+        GIT_SHALLOW TRUE)
+      FetchContent_MakeAvailable(cpp_httplib)
+    endif()
+    list(APPEND PM_ENCRYPTION_CLI_SOURCES cli/http_harness.cpp)
   endif()
 
-  add_executable(pm-encryption
-    cli/main.cpp
-    cli/http_harness.cpp)
+  add_executable(pm-encryption ${PM_ENCRYPTION_CLI_SOURCES})
   target_link_libraries(pm-encryption PRIVATE
     pm-encryption-lib
     CLI11::CLI11
-    nlohmann_json::nlohmann_json
-    httplib::httplib)
+    nlohmann_json::nlohmann_json)
+  if(PM_ENCRYPTION_HTTP_HARNESS)
+    target_link_libraries(pm-encryption PRIVATE httplib::httplib)
+  endif()
   target_compile_features(pm-encryption PRIVATE cxx_std_20)
   if(MSVC)
     target_compile_definitions(pm-encryption PRIVATE

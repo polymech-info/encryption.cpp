@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { request } from 'node:http';
 import { spawn } from 'node:child_process';
 import { exePath, requireExe, run } from './commons.mjs';
 
@@ -42,6 +43,40 @@ check(Number.isInteger(ready?.port) && ready.port > 0, 'server chooses an epheme
   serverOut);
 check(ready?.authenticated_peer === false,
   'harness reports that peer identity is intentionally not authenticated');
+check(ready?.mode === 'unauthenticated-kx', 'server reports the unauthenticated feature mode');
+
+function postJson(port, path, body = '') {
+  return new Promise((resolve) => {
+    const req = request({
+      hostname: '127.0.0.1',
+      port,
+      path,
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(body),
+      },
+    }, (res) => {
+      let data = '';
+      res.setEncoding('utf8');
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        let json = null;
+        try { json = JSON.parse(data); } catch { json = null; }
+        resolve({ status: res.statusCode ?? 0, json });
+      });
+    });
+    req.on('error', () => resolve({ status: 0, json: null }));
+    req.end(body);
+  });
+}
+
+const denied = ready?.port
+  ? await postJson(ready.port, '/v1/e2ee/handshake', '{}')
+  : { status: 0, json: null };
+check(denied.status === 400 && denied.json?.code === 'unauthenticated_mode',
+  'unauthenticated server rejects the identity handshake route',
+  JSON.stringify(denied));
 
 const secretPrompt = 'wifi secret: hello from the phone';
 let client = { status: -1, json: null, stdout: '', stderr: '' };

@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const dir = dirname(fileURLToPath(import.meta.url));
-const suites = ['test-core.mjs', 'test-http.mjs'];
+const suites = ['test-core.mjs', 'test-http.mjs', 'test-auth.mjs'];
 let failed = 0;
 
 for (const suite of suites) {

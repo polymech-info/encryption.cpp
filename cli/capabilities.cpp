@@ -1,0 +1,38 @@
+#include "commands.hpp"
+
+#include "pm/encryption/features.hpp"
+
+#include <iostream>
+#include <nlohmann/json.hpp>
+
+namespace pm::encryption::cli {
+
+int run_capabilities() {
+    std::cout << nlohmann::json{
+                     {"ok", true},
+                     {"schema", "pm.encryption.capabilities.v1"},
+                     {"secure_channel_e2ee", true},
+                     {"authenticated_handshake", feature_authenticated_handshake},
+                     {"handshake", "sigma-i-v1"},
+                     {"chat_http_sse_harness", feature_http_harness},
+                     {"cipher", "XChaCha20-Poly1305"},
+                     {"key_agreement", "libsodium-crypto_kx-X25519"},
+                     {"frame", "PME2/v1"},
+                     {"replay_window", 64},
+                     {"libsignal", feature_libsignal},
+                     {"openmls", feature_openmls},
+                     {"features", {
+                         {"libsodium", feature_libsodium},
+                         {"libsignal", feature_libsignal},
+                         {"openmls", feature_openmls},
+                         {"http_harness", feature_http_harness},
+                         {"unauthenticated_kx", feature_unauthenticated_kx},
+                         {"authenticated_handshake", feature_authenticated_handshake},
+                     }},
+                 }
+                     .dump()
+              << "\n";
+    return 0;
+}
+
+} // namespace pm::encryption::cli

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "pm/encryption/features.hpp"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -35,6 +37,9 @@ enum class ErrorCode {
     Replay,
     Stale,
     AuthenticationFailed,
+    IdentityMismatch,
+    BadSignature,
+    UnexpectedState,
 };
 
 struct Error {
@@ -84,11 +89,13 @@ bool decode_base64(std::string_view text, std::vector<std::uint8_t>& out,
 /**
  * Transport-neutral online bidirectional encrypted channel.
  *
- * The caller authenticates the peer public key. SecureChannel derives
- * independent initiator-to-responder and responder-to-initiator keys, binds
- * every frame to a session id and caller context, and rejects replayed or stale
- * frames. It does not own transport, identity, persistence, authorization, or
- * application payload semantics.
+ * initiator() and responder() derive keys from the supplied X25519 publics and
+ * do not authenticate a device identity. Handshake is the path that pins both
+ * Ed25519 identities into the transcript and the derived keys.
+ *
+ * SecureChannel binds every frame to a session id and caller context, and
+ * rejects replayed or stale frames. It does not own transport, persistence,
+ * authorization, or application payload semantics.
  */
 class SecureChannel {
 public:
@@ -99,12 +106,14 @@ public:
     SecureChannel(const SecureChannel&) = delete;
     SecureChannel& operator=(const SecureChannel&) = delete;
 
+#if PM_ENCRYPTION_UNAUTHENTICATED_KX
     static SecureChannel initiator(KeyPair local, const PublicKey& responder_public,
                                    const SessionId& session_id, std::string context,
                                    Error& err);
     static SecureChannel responder(KeyPair local, const PublicKey& initiator_public,
                                    const SessionId& session_id, std::string context,
                                    Error& err);
+#endif
 
     bool valid() const noexcept { return valid_; }
     EndpointRole role() const noexcept { return role_; }
@@ -122,6 +131,12 @@ public:
                std::size_t max_plaintext = k_default_max_plaintext);
 
 private:
+    friend class Handshake;
+
+    static SecureChannel from_authenticated_exchange(
+        EndpointRole role, KeyPair local_ephemeral, const PublicKey& remote_ephemeral,
+        const SessionId& session_id, std::span<const std::uint8_t> transcript, Error& err);
+
     EndpointRole role_ = EndpointRole::Initiator;
     SessionId session_id_{};
     std::string context_;

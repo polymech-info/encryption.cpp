@@ -2,8 +2,13 @@
 
 Standalone C++20 security protocol library and test CLI for PolyMech/Tanit.
 
-**Status:** standalone transport-neutral secure channel and a chat-oriented
-HTTP/SSE test harness implemented; not integrated into Tanit.  
+**Status:** standalone library and CLI. Windows tests cover the secure channel,
+the pinned-identity handshake, and both HTTP harness modes. Not integrated
+into Tanit. Linux and Android are not yet built.  
+**Next:** transport-neutral file manifests and chunks, still inside this
+package.  
+**Sibling ceiling:** none for a standalone build. A host may link
+`commons.cpp` and nothing else from `packages/`.  
 **License:** BSD-3-Clause for this package. Vendored dependencies retain their
 own licenses.
 
@@ -36,6 +41,13 @@ The design context is in `../../docs/phone-mesh.md`.
 - move-only key/channel types with secret-key clearing;
 - deterministic seeded identities for protocol tests.
 
+`Identity` is a long-term Ed25519 signing key. `Handshake` is a three-message
+SIGMA-I exchange for peers that have already pinned each other's identity. It
+binds version, suite, context, session id, both identities, and both X25519
+ephemerals into the signatures and into HKDF-SHA256 channel keys. It is the
+online session setup. It is not Signal: Signal's PQXDH-plus-Double-Ratchet
+session is the later, durable, offline one-to-one layer.
+
 The channel API does not contain chat, HTTP, SSE, file, or media concepts.
 Those are vertical protocols which pass bounded payload bytes, a content type,
 and an authenticated caller context into the channel.
@@ -46,28 +58,54 @@ generic channel over real HTTP/SSE:
 ```text
 pm-encryption capabilities
 pm-encryption selftest
+pm-encryption identity --seed <64 hex chars>
 pm-encryption scenario tanit-chat-wifi
 pm-encryption roundtrip --text "hello"
 pm-encryption server --host 127.0.0.1 --port 0 --once
 pm-encryption client --url http://127.0.0.1:<port> --text "hello"
+pm-encryption server --authenticated --identity-seed <hex> --peer-key <base64>
+pm-encryption client --authenticated --identity-seed <hex> --peer-key <base64> --url ... --text "hello"
 ```
 
 The server/client harness proves encrypted JSON requests and independently
 encrypted SSE events over real HTTP, including `[DONE]`. It uses a short-lived,
 single-use ephemeral server challenge and does not log the prompt.
 
-The harness intentionally reports `authenticated_peer:false`. Its ephemeral
-HTTP key exchange is vulnerable to an active man-in-the-middle unless an
-external trust layer authenticates the server key. Production E2EE therefore
-still requires the pairing identity or pinned TLS identity to sign/bind that
-challenge. The harness validates framing and streaming, not production trust.
+Without `--authenticated`, the harness reports `authenticated_peer:false` and
+`mode:unauthenticated-kx`. That mode is a test of framing only: its ephemeral
+exchange is vulnerable to an active man-in-the-middle. `--authenticated`
+switches the same binary to the pinned SIGMA-I handshake and reports
+`authenticated_peer:true`. The caller supplies both the local seed and the
+peer's already-pinned public key. The harness still does not store identities
+or decide trust.
+
+## Feature flags
+
+Impacting switches are CMake options, reported by `pm-encryption capabilities`,
+and the HTTP mode is also a CLI flag.
+
+| CMake option | Default | Effect |
+|---|---|---|
+| `PM_ENCRYPTION_LIBSODIUM` | `ON` | X25519, Ed25519, HKDF, and XChaCha20-Poly1305. `OFF` is rejected until another profile exists |
+| `PM_ENCRYPTION_UNAUTHENTICATED_KX` | `ON` | Compiles `SecureChannel::initiator/responder`, which do not bind a device identity |
+| `PM_ENCRYPTION_HTTP_HARNESS` | `ON` | Compiles the standalone HTTP/SSE harness |
+| `PM_ENCRYPTION_LIBSIGNAL` | `OFF` | AGPL-3.0 libsignal adapter. Accepted, and fail-closed until `packages/libsignal` is vendored |
+| `PM_ENCRYPTION_OPENMLS` | `OFF` | Group-messaging adapter. Fail-closed until `packages/openmls` is vendored |
+
+```text
+cmake -S packages/encryption.cpp -B build -DPM_ENCRYPTION_LIBSIGNAL=ON
+```
+
+`--authenticated` on `server` and `client` selects the pinned handshake. The
+unauthenticated challenge route and the handshake route refuse each other's
+mode, so the flag changes the trust behavior rather than only the label.
 
 Not implemented yet:
 
 - durable device identity and secure key storage;
-- authenticated pairing/challenge signatures;
+- pairing, invite, and fingerprint UX that produces the pinned identity;
 - crash-safe persistent counters or ratchet state;
-- libsignal, offline messages, and multi-device convergence;
+- the libsignal adapter itself, offline messages, and multi-device convergence;
 - MLS groups;
 - files or media;
 - any Tanit, Android, VFS, or WebRTC integration.
@@ -118,18 +156,16 @@ phone mesh / VFS / chat / audio / video
 
 ### `commons.cpp`
 
-`encryption.cpp` uses `commons.cpp` both as a library and as the package
-template:
+`commons.cpp` is the package template and the only sibling a host may link.
 
-- target and CLI conventions follow `packages/commons.cpp`;
-- portable errors, byte/file helpers, IDs, clocks, and storage contracts should
-  come from `pm::commons` where they already exist;
-- `encryption.cpp` links `pm-commons-lib`/`pm::commons`;
+- standalone `npm test` links no package under `packages/`;
+- a host that embeds the library may pass an already-built `pm-commons-lib`;
+- encryption does not call `add_subdirectory` on commons or any other sibling;
+- vfs, audio, video, llm, and Tanit stay above this package;
 - dependency direction is one-way: commons must never link encryption;
-- encryption must not copy commons implementations into this tree;
-- the parent adds commons before encryption, or a standalone build resolves an
-  installed `pm-commons` package;
-- encryption does not call `add_subdirectory` on a sibling package.
+- portable errors, byte/file helpers, IDs, clocks, and storage contracts should
+  come from `pm::commons` when a host actually provides them;
+- encryption must not copy commons implementations into this tree.
 
 Public headers must not include Tanit `src/` headers, Android/JNI types, Win32 UI
 types, Compose, settings stores, or branding. The host passes storage, clock,
@@ -148,6 +184,14 @@ The library owns:
 - file manifests, content-key wrapping, chunk encryption, and verification;
 - protocol state transitions and atomic persistence requirements;
 - optional adapters for reviewed message/group protocols.
+
+The host passes a `pm::encryption::LogSink` into CLI and harness entry points.
+There is no process-global logger in this package. `CommonsLog` in
+`commons_log.hpp` forwards that sink to `pm::log` when the host include path
+provides `logging/pm_log.hpp`. The standalone CLI uses `StderrLog` instead, and
+`--log-level` selects its floor. Diagnostic lines carry modes and error codes.
+Protocol JSON stays on stdout. Keys, seeds, plaintext, and frames stay out of
+both.
 
 The host owns:
 
@@ -183,10 +227,12 @@ Vendoring libsignal does not relicense it. Official libsignal currently:
 - describes external use as unsupported;
 - is AGPL-3.0.
 
-Therefore libsignal support is optional and off by default until licensing,
-distribution, update, and cross-platform API decisions are complete. Keep its
-code and artifacts out of the default BSD-only library. A build must clearly
-report whether Signal support is absent, dynamically serviced, or linked.
+AGPL-3.0 is an accepted license for that optional sibling. It stays out of the
+default build. `-DPM_ENCRYPTION_LIBSIGNAL=ON` is the switch that opts in, and
+configuration fails closed until `packages/libsignal` is actually present. A
+build reports the flag through `capabilities`. Linking libsignal does not
+relicense the BSD core, and it does not turn the online handshake into a
+Signal session.
 
 Preferred isolation:
 
@@ -342,16 +388,18 @@ Hard cases:
 
 ### Layer 3 — Authenticated session and envelopes
 
-Select and integrate a reviewed authenticated handshake. Add:
+The current online profile is `sigma-i-v1`: Ed25519 identity signatures over a
+canonical transcript, X25519 `crypto_kx`, and HKDF-SHA256 into
+`SecureChannel`. Signal remains Layer 6 because its session outlives one
+connection and must decrypt messages while the peer is offline.
 
-- initiator/responder role binding;
-- transcript hash and downgrade protection;
-- independent derived keys for control, manifests, key wrapping, chunks, and
+Role binding, the transcript hash, version refusal, and the channel replay
+window are in this profile. Still to add on this layer:
+
+- separate derived keys for control, manifests, file-key wrapping, chunks, and
   resume tokens;
-- session generation and reconnect;
-- replay window and duplicate/idempotency behavior;
-- re-key and close;
-- strict separation between authentication and authorization.
+- reconnect and re-key without a new pinned handshake;
+- explicit close.
 
 The network is a byte courier. Tests deliver frames twice, out of order,
 truncated, delayed across re-key, from an old generation, and under the wrong
@@ -636,15 +684,20 @@ pm-encryption file verify --state peer-b --manifest manifest.bin --input part.bi
 
 ## Build and integration target
 
-Follow the package scaffolding used by `commons.cpp`:
+Scripts live in this package (`scripts/cmake.mjs`, `scripts/ninja.mjs`). They
+do not call the repository-root script directory.
 
 ```text
 npm run configure
 npm run build:cpp
+npm run build:cpp-fast
 npm test
+npm run test:core
+npm run test:http
+npm run test:auth
 ```
 
-From the repository root, desired aliases are:
+From the repository root, the aliases are:
 
 ```text
 npm run build:cpp:encryption
@@ -663,15 +716,17 @@ endif()
 target_link_libraries(${HOST_TARGET} PRIVATE pm-encryption-lib)
 ```
 
-The parent must make `pm::commons` and the selected crypto provider available
-before adding encryption. Optional integrations use explicit CMake options:
+Standalone configure fetches libsodium and the CLI-only libraries itself. A
+parent that embeds the library must already have defined `pm-commons-lib` when
+it wants that sibling; encryption does not fetch commons. Optional integrations
+use explicit CMake options:
 
 ```text
 PM_ENCRYPTION_LIBSODIUM=ON
+PM_ENCRYPTION_UNAUTHENTICATED_KX=ON
+PM_ENCRYPTION_HTTP_HARNESS=ON
 PM_ENCRYPTION_LIBSIGNAL=OFF
 PM_ENCRYPTION_OPENMLS=OFF
-PM_ENCRYPTION_TEST_SERVICE=OFF
-PM_ENCRYPTION_FUZZ=OFF
 ```
 
 Feature definitions are private unless they affect a public type. Public API
@@ -696,26 +751,42 @@ Before production pairing, file exchange, Signal, MLS, or media-key work, obtain
 an external cryptographic review of the composed protocol and storage behavior.
 A reviewed primitive does not make an unreviewed composition secure.
 
-## First deliverable
+## Delivered
 
-Do not begin with a phone UI or live WebRTC demo. The first deliverable is:
+Windows standalone, no sibling packages linked:
+
+- [x] `SecureChannel` frames, replay window, and typed failures
+- [x] Ed25519 `Identity` and SIGMA-I `Handshake` into that channel
+- [x] CLI split by feature, host-passed `LogSink`, `--log-level`
+- [x] HTTP/SSE harness in unauthenticated and `--authenticated` modes
+- [x] CMake feature flags, including fail-closed libsignal and OpenMLS
+- [x] `npm test` covers core, HTTP, and authenticated handshake
+
+## Next
+
+Stay standalone. The next deliverable is file cryptography, still with no
+sibling package:
 
 ```text
 pm-encryption selftest
-  -> canonical encoding and parser limits
-  -> deterministic device identities
-  -> reviewed authenticated in-memory handshake
   -> signed manifest
-  -> encrypted empty/one/multi-chunk files
-  -> hostile-network scenario runner
-  -> crash/faulting state store
-  -> resume and final verification
+  -> encrypted empty, one-chunk, and multi-chunk payloads
+  -> hostile delivery: duplicate, missing, reordered, corrupt
+  -> in-memory faulting state store
+  -> resume and final content verification
 ```
 
-It runs as two deterministic virtual peers in one process, then as two CLI
-processes through the test proxy. Once that survives the complete scenario
-matrix, connect it to the existing desktop/phone pairing and VFS. Signal chat,
-groups, and media keys remain independent later layers.
+Two deterministic peers in one process come before two CLI processes. Pairing
+storage, libsignal, MLS, VFS, and Tanit stay behind that file suite.
+
+## Todos
+
+- [ ] File manifest, content key, and authenticated chunks
+- [ ] Fault-injecting in-memory store for crash and rollback cases
+- [ ] Resume across a new channel with the same transfer id
+- [ ] Linux and Android NDK configure of this package
+- [ ] Vendoring `packages/libsignal` only after the file suite is stable
+- [ ] Host embedding, with `commons.cpp` as the only sibling
 
 ## References
 

@@ -133,6 +133,9 @@ const char* error_code_name(ErrorCode code) noexcept {
     case ErrorCode::Replay: return "replay";
     case ErrorCode::Stale: return "stale";
     case ErrorCode::AuthenticationFailed: return "authentication_failed";
+    case ErrorCode::IdentityMismatch: return "identity_mismatch";
+    case ErrorCode::BadSignature: return "bad_signature";
+    case ErrorCode::UnexpectedState: return "unexpected_state";
     }
     return "unknown";
 }
@@ -293,6 +296,101 @@ SecureChannel& SecureChannel::operator=(SecureChannel&& other) noexcept {
     return *this;
 }
 
+SecureChannel SecureChannel::from_authenticated_exchange(
+    EndpointRole role, KeyPair local_ephemeral, const PublicKey& remote_ephemeral,
+    const SessionId& session_id, std::span<const std::uint8_t> transcript, Error& err) {
+    err = {};
+    SecureChannel out;
+    if (!local_ephemeral.valid()) {
+        err = Error::make(ErrorCode::InvalidArgument, "handshake ephemeral is invalid");
+        return out;
+    }
+    if (transcript.empty() || transcript.size() > 8192) {
+        err = Error::make(ErrorCode::InvalidArgument, "handshake transcript length is invalid");
+        return out;
+    }
+    PublicKey zero_public{};
+    if (sodium_memcmp(remote_ephemeral.data(), zero_public.data(), zero_public.size()) == 0
+        || sodium_is_zero(session_id.data(), session_id.size()) == 1) {
+        err = Error::make(ErrorCode::InvalidArgument,
+                          "handshake peer ephemeral or session is empty");
+        return out;
+    }
+
+    std::array<std::uint8_t, 32> raw_rx{};
+    std::array<std::uint8_t, 32> raw_tx{};
+    const int agreed = role == EndpointRole::Initiator
+        ? crypto_kx_client_session_keys(raw_rx.data(), raw_tx.data(),
+                                        local_ephemeral.public_.data(),
+                                        local_ephemeral.secret_.data(),
+                                        remote_ephemeral.data())
+        : crypto_kx_server_session_keys(raw_rx.data(), raw_tx.data(),
+                                        local_ephemeral.public_.data(),
+                                        local_ephemeral.secret_.data(),
+                                        remote_ephemeral.data());
+    if (agreed != 0) {
+        wipe(raw_rx.data(), raw_rx.size());
+        wipe(raw_tx.data(), raw_tx.size());
+        err = Error::make(ErrorCode::KeyAgreementFailed, "authenticated key agreement failed");
+        return out;
+    }
+
+    std::array<std::uint8_t, 32> salt{};
+    if (crypto_generichash(salt.data(), salt.size(),
+                           transcript.data(),
+                           static_cast<unsigned long long>(transcript.size()),
+                           nullptr, 0) != 0) {
+        wipe(raw_rx.data(), raw_rx.size());
+        wipe(raw_tx.data(), raw_tx.size());
+        err = Error::make(ErrorCode::CryptoUnavailable, "handshake transcript hash failed");
+        return out;
+    }
+
+    auto derive_key = [&](std::array<std::uint8_t, 32>& dest,
+                          const std::array<std::uint8_t, 32>& ikm,
+                          const char* info) {
+        unsigned char prk[crypto_kdf_hkdf_sha256_KEYBYTES];
+        if (crypto_kdf_hkdf_sha256_extract(prk, salt.data(), salt.size(),
+                                           ikm.data(), ikm.size()) != 0) {
+            sodium_memzero(prk, sizeof(prk));
+            return false;
+        }
+        const bool ok = crypto_kdf_hkdf_sha256_expand(
+                            dest.data(), dest.size(), info, std::strlen(info), prk) == 0;
+        sodium_memzero(prk, sizeof(prk));
+        return ok;
+    };
+
+    std::array<std::uint8_t, 32> rx{};
+    std::array<std::uint8_t, 32> tx{};
+    const bool derived = role == EndpointRole::Initiator
+        ? derive_key(tx, raw_tx, "pm.encryption.channel.i2r.v1")
+            && derive_key(rx, raw_rx, "pm.encryption.channel.r2i.v1")
+        : derive_key(tx, raw_tx, "pm.encryption.channel.r2i.v1")
+            && derive_key(rx, raw_rx, "pm.encryption.channel.i2r.v1");
+    wipe(raw_rx.data(), raw_rx.size());
+    wipe(raw_tx.data(), raw_tx.size());
+    if (!derived) {
+        wipe(rx.data(), rx.size());
+        wipe(tx.data(), tx.size());
+        wipe(salt.data(), salt.size());
+        err = Error::make(ErrorCode::KeyAgreementFailed, "authenticated key derivation failed");
+        return out;
+    }
+
+    out.role_ = role;
+    out.session_id_ = session_id;
+    out.context_.assign(reinterpret_cast<const char*>(salt.data()), salt.size());
+    out.rx_key_ = rx;
+    out.tx_key_ = tx;
+    out.valid_ = true;
+    wipe(rx.data(), rx.size());
+    wipe(tx.data(), tx.size());
+    wipe(salt.data(), salt.size());
+    return out;
+}
+
+#if PM_ENCRYPTION_UNAUTHENTICATED_KX
 SecureChannel SecureChannel::initiator(KeyPair local, const PublicKey& responder_public,
                                        const SessionId& session_id, std::string context,
                                        Error& err) {
@@ -332,6 +430,7 @@ SecureChannel SecureChannel::responder(KeyPair local, const PublicKey& initiator
     out.valid_ = true;
     return out;
 }
+#endif
 
 Error SecureChannel::seal(std::span<const std::uint8_t> plaintext,
                           std::string_view content_type,

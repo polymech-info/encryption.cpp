@@ -19,6 +19,24 @@ check(capabilities.json?.schema === 'pm.encryption.capabilities.v1', 'capabiliti
 check(capabilities.json?.secure_channel_e2ee === true, 'generic secure channel is compiled');
 check(capabilities.json?.chat_http_sse_harness === true, 'chat HTTP/SSE vertical is compiled');
 check(capabilities.json?.libsignal === false, 'libsignal is not silently enabled');
+check(capabilities.json?.authenticated_handshake === true, 'authenticated handshake is compiled');
+check(capabilities.json?.handshake === 'sigma-i-v1', 'handshake profile is sigma-i-v1');
+check(capabilities.json?.features?.unauthenticated_kx === true,
+  'unauthenticated exchange is an explicit feature flag');
+check(capabilities.json?.features?.libsignal === false, 'libsignal CMake feature is off');
+check(capabilities.json?.features?.http_harness === true, 'HTTP harness CMake feature is on');
+
+const seed = '11'.repeat(32);
+const identity = run(['identity', '--seed', seed]);
+const identityAgain = run(['identity', '--seed', seed]);
+const otherIdentity = run(['identity', '--seed', '22'.repeat(32)]);
+check(identity.status === 0 && identity.json?.schema === 'pm.encryption.identity.v1',
+  'identity command exits 0', identity.stdout || identity.stderr);
+check(identity.json?.public_key && identity.json.public_key === identityAgain.json?.public_key,
+  'identity seed is deterministic');
+check(identity.json?.public_key !== otherIdentity.json?.public_key,
+  'distinct seeds produce distinct identity keys');
+check(!identity.stdout.includes(seed), 'identity output does not echo the seed');
 
 const selftest = run(['selftest']);
 check(selftest.status === 0, 'selftest exits 0', selftest.stdout || selftest.stderr);
