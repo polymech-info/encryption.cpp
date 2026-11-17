@@ -18,10 +18,12 @@ namespace pm::encryption {
  *   3. initiator signature
  *
  * Both signatures cover the version, suite, context, session id, both
- * identities, and both ephemerals. Channel keys are HKDF-SHA256 of the X25519
- * exchange, salted with that transcript. One key in each direction then
- * encrypts every frame for the process. This is not Signal, Noise, or TLS,
- * and it does not create trust by itself.
+ * identities, and both ephemerals. Channel keys are HKDF-SHA256 of the matching
+ * crypto_kx direction, salted with that transcript. One transmit key and one
+ * receive key then encrypt every frame of that channel. complete() is local:
+ * the initiator is done after writing message 3, and the responder is done
+ * only after message 3 verifies. There is no completion acknowledgement.
+ * This is not Signal, Noise, or TLS, and it does not create trust by itself.
  */
 class Handshake {
 public:

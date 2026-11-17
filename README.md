@@ -3,13 +3,17 @@
 Standalone C++20 security protocol library and test CLI for PolyMech/Tanit.
 
 **Status:** `live_session` is a pinned online channel with one key for the
-process. `group-file` seals one content key per recipient and stores
-ciphertext on a `vfs.cpp` mount. Neither is production E2EE. The reading of
-what actually holds is `docs/security-assessment.md`. Signal and MLS stay
-compiled out. Linux and Android are not yet built.  
-**Next:** production gates in `docs/security-assessment.md`. `chat-harness` is
-the direct loopback pair. `room-harness` is the in-process broker Android
-will host later (`docs/room-broker.md`). Tailscale does not replace pairing.  
+process. `group-file` seals one content key per recipient. The dev preset
+also links the libsignal text room and the datagram flow facade. The
+option default for libsignal stays off. MLS stays compiled out. None of this
+is production E2EE. What holds is `docs/security-assessment.md`. The target
+shape is `docs/design.md`. Linux and Android are not yet built.  
+**Next:** no new wire protocol. The pinned `PMEH` / `PME2` channel stays,
+because a LAN has no Tailscale. `pm-encryption flow` is the datagram byte API.
+Lifecycle and authority stay host policy.
+`chat-harness` is the loopback
+pair. `room-harness` is the in-process broker. Tailscale does not replace
+pairing.  
 **Sibling ceiling:** the library links no sibling. The standalone CLI links
 `vfs.cpp` for the file scenario and uses that package's bundled path
 sanitizer, so this build does not pull in `commons.cpp`.  
@@ -58,14 +62,19 @@ direction. Those keys encrypt every frame until the process exits.
 0.108.0. That build runs PQXDH and the Triple Ratchet for an in-memory text
 room. The option default stays off, so a host that does not opt in stays
 BSD-only. Sesame, durable session storage, and the upstream libsignal test
-suite are still open. That session also wraps one audio key and one video
-key. The frames themselves are `PMA1/v1` and `PMV1/v1`: a lost packet is a
-gap, and a repeated sequence is a replay. Capture, codecs, and WebRTC are
-not in this library.
+suite are still open. That session also wraps datagram flow keys. The frame
+is `PMD1/v1`. The host chooses the flow id and the scope, and the epoch is
+bound into the frame. A lost packet is a gap, and a repeated sequence is a
+replay. `pm::host::Device` is the test
+host in this package. It captures encoded bytes, publishes them on a
+loopback plane, and renders them. It does not open a microphone, run a
+codec, or speak WebRTC.
 
 `FileOffer` is the group-file envelope. The sender encrypts the bytes once
 with a random content key, signs the manifest with the Ed25519 identity, and
-seals that key to each recipient's separate X25519 file key. A chat message
+seals that key to each recipient's separate X25519 file key. A `DeviceFileKey`
+statement, outside the envelope, binds that file public key to the pinned
+device. A chat message
 would carry the manifest, not the file. This is not MLS: there is no group
 ratchet, and dropping a recipient from a later revision does not make the
 older ciphertext unreadable. `pm-encryption scenario group-file` puts the
@@ -87,6 +96,8 @@ pm-encryption policy live
 pm-encryption policy signal
 pm-encryption signal-room --text "hello"
 pm-encryption media-room
+pm-encryption media-host
+pm-encryption flow
 pm-encryption selftest
 pm-encryption identity --seed <64 hex chars>
 pm-encryption scenario tanit-chat-wifi
@@ -242,7 +253,9 @@ The host owns:
 - network sockets, WebRTC, HTTPS, rendezvous, and relay selection;
 - account identity, contacts, notifications, and UI;
 - file selection, SAF URI permissions, mount jails, and final file placement;
-- media capture and render.
+- a production microphone, camera, codec, and WebRTC socket. The test host
+  in this package (`pm-encryption media-host`) feeds encoded frames and
+  renders them on a loopback plane.
 
 ## Sibling dependencies
 
@@ -461,7 +474,7 @@ product-ready while SA-15 is open:
 - authenticated fixed-size chunks;
 - deterministic missing-range resume;
 - final whole-content verification;
-- recipient key wrapping;
+- recipient key wrapping, after a `DeviceFileKey` statement for the pinned device;
 - manifest revision and source-change detection;
 - safe cancellation and partial-state expiry.
 
@@ -508,9 +521,14 @@ message opens while the recipient was offline, the reply advances the
 ratchet, a later message can arrive first, a bundle with no one-time prekey
 still opens, and a replay, a flipped frame, and an outsider are rejected.
 The chat bytes are not printed and are not stored in the broker. Sessions
-live in the adapter process only. `pm-encryption media-room` then wraps an
-audio key and a video key through that session. The broker stores the wraps
-and does not store the media frames.
+live in the adapter process only. `pm-encryption media-room` then wraps a
+datagram flow key for each host-chosen flow through that session. The broker
+stores the wraps and does not store the frames. `pm-encryption flow` is the
+facade a later live session calls: chat bytes, binary, and encoded frames
+share `seal` / `open`. Reliable messages stay on `SecureChannel`. Durable
+objects stay on the file envelope. `pm-encryption media-host` is the test
+host: one device captures encoded frames, the loopback plane carries the
+sealed packets, and the other device renders them.
 
 Still open on this layer:
 
@@ -755,6 +773,7 @@ npm run test:harness
 npm run test:room
 npm run test:signal
 npm run test:media
+npm run test:host
 npm run test:http
 npm run test:auth
 ```
@@ -839,13 +858,16 @@ Windows standalone. The library links no sibling; the CLI links `vfs.cpp` for `g
 
 ## Next
 
-The live channel still uses one key for the process. The signal text room
-ratchets through libsignal, in memory. Audio and video frames use a separate
-track key and still have no capture path or WebRTC transport. Sesame and a
+A live channel still uses one transmit key and one receive key for that
+channel. That channel stays, because two devices on a LAN do not have
+Tailscale. The signal text room ratchets through libsignal, in memory. The
+test host captures and renders encoded frames on a loopback plane. A real
+device, codec, and WebRTC socket stay outside this package. Sesame and a
 durable store are open. An old file still opens after the recipient is
 dropped from a later revision. The remaining production gates are an external
 review of `docs/protocol-model.md`, a Linux and Android build, and any
-listening, tailnet, or P2P broker.
+listening, tailnet, or P2P broker. No new envelope until an existing
+primitive cannot meet the requirement.
 
 ## Todos
 
@@ -870,12 +892,14 @@ Before any production claim:
 - [x] SA-11 `reseal_file_chunk` refuses a second plaintext at the same index
 - [x] SA-12 Member removal does not revoke an old file, and the scenario locks that
 - [x] SA-14 `tests/vectors/kat.v1.json` is the handshake, frame, and file vector
-- [ ] SA-15 External review of `docs/protocol-model.md`. The model is written. Nobody outside this codebase has checked it
+- [ ] SA-15 External review of `docs/protocol-model.md`. The wire layouts and the handshake state machine are written. Nobody outside this codebase has checked them
 - [ ] SA-16 Configure on Linux and the Android NDK. This pass was Windows only
 - [ ] SA-17 A listening broker, tailnet bind, or P2P path is still a new adversary. The in-process broker is the stand-in
+- [x] SA-18 A `DeviceFileKey` statement binds a file public key to the pinned Ed25519 identity, outside the file envelope
 - [x] `signal` text room, behind `PM_ENCRYPTION_LIBSIGNAL` in the dev preset. In memory
-- [x] Audio and video frames (`PMA1`, `PMV1`). The broker carries the key wrap, not the frames
-- [ ] Media capture, codecs, and a WebRTC transport
+- [x] Datagram flows (`PMD1`). Flow id, scope, and epoch are bound into the frame. The broker carries the key wrap, not the frames
+- [x] `pm::host::Device` test host: capture, mute, grant, rekey, and render on a loopback plane
+- [ ] A real microphone, camera, codec, and WebRTC transport
 - [ ] Signal persistence, Sesame, and the upstream libsignal test suite
 - [ ] Host embedding, with `commons.cpp` when the host image already has it
 

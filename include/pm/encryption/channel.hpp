@@ -56,6 +56,34 @@ struct Error {
 
 const char* error_code_name(ErrorCode code) noexcept;
 
+/**
+ * Bounded replay bitmap shared by the online channel and datagram flows.
+ * SequenceZeroThenWindow rejects every sequence until 0 has been accepted.
+ * AnySequenceThenWindow accepts whatever arrives first. A failed preview
+ * does not change the window.
+ */
+class ReplayWindow {
+public:
+    enum class Rule : std::uint8_t {
+        SequenceZeroThenWindow = 1,
+        AnySequenceThenWindow = 2,
+    };
+
+    ReplayWindow() = default;
+    ReplayWindow(Rule rule, int width) noexcept;
+
+    Rule rule() const noexcept { return rule_; }
+    int width() const noexcept { return width_; }
+    Error preview(std::uint64_t sequence, ReplayWindow& next) const;
+
+private:
+    Rule rule_ = Rule::SequenceZeroThenWindow;
+    int width_ = 64;
+    std::uint64_t highest_ = 0;
+    std::uint64_t bits_ = 0;
+    bool started_ = false;
+};
+
 enum class EndpointRole : std::uint8_t {
     Initiator = 1,
     Responder = 2,
@@ -153,9 +181,7 @@ private:
     std::array<std::uint8_t, 32> rx_key_{};
     std::array<std::uint8_t, 32> tx_key_{};
     std::uint64_t next_tx_ = 0;
-    std::uint64_t rx_highest_ = 0;
-    std::uint64_t rx_bitmap_ = 0;
-    bool rx_initialized_ = false;
+    ReplayWindow replay_{};
     bool valid_ = false;
 };
 

@@ -17,6 +17,8 @@ int run_chat_harness(const std::string& host, const std::string& text, LogSink& 
 int run_room_harness(const std::string& text, LogSink& log);
 int run_signal_room(const std::string& text, LogSink& log);
 int run_media_room(LogSink& log);
+int run_media_host(LogSink& log);
+int run_flow(LogSink& log);
 int run_vectors();
 int run_fuzz();
 int run_http_command(bool server, const std::string& host, int port, bool once,

@@ -267,9 +267,7 @@ SecureChannel::SecureChannel(SecureChannel&& other) noexcept
       rx_key_(other.rx_key_),
       tx_key_(other.tx_key_),
       next_tx_(other.next_tx_),
-      rx_highest_(other.rx_highest_),
-      rx_bitmap_(other.rx_bitmap_),
-      rx_initialized_(other.rx_initialized_),
+      replay_(other.replay_),
       valid_(other.valid_) {
     wipe(other.rx_key_.data(), other.rx_key_.size());
     wipe(other.tx_key_.data(), other.tx_key_.size());
@@ -287,9 +285,7 @@ SecureChannel& SecureChannel::operator=(SecureChannel&& other) noexcept {
     rx_key_ = other.rx_key_;
     tx_key_ = other.tx_key_;
     next_tx_ = other.next_tx_;
-    rx_highest_ = other.rx_highest_;
-    rx_bitmap_ = other.rx_bitmap_;
-    rx_initialized_ = other.rx_initialized_;
+    replay_ = other.replay_;
     valid_ = other.valid_;
     wipe(other.rx_key_.data(), other.rx_key_.size());
     wipe(other.tx_key_.data(), other.tx_key_.size());
@@ -533,16 +529,9 @@ Error SecureChannel::open(std::span<const std::uint8_t> frame,
     if (pos > frame.size() || frame.size() - pos != cipher_size)
         return Error::make(ErrorCode::InvalidFrame, "encrypted frame size does not match its header");
 
-    if (!rx_initialized_) {
-        if (sequence != k_first_sequence)
-            return Error::make(ErrorCode::Stale, "encrypted frame arrived before sequence 0");
-    } else if (sequence <= rx_highest_) {
-        const std::uint64_t delta = rx_highest_ - sequence;
-        if (delta >= static_cast<std::uint64_t>(k_replay_window))
-            return Error::make(ErrorCode::Stale, "encrypted frame is outside the replay window");
-        if ((rx_bitmap_ & (std::uint64_t{1} << delta)) != 0)
-            return Error::make(ErrorCode::Replay, "encrypted frame was already accepted");
-    }
+    ReplayWindow accepted;
+    if (Error replay = replay_.preview(sequence, accepted))
+        return replay;
 
     const auto aad = make_aad(frame.first(pos), context_);
     plaintext.resize(cipher_size - k_tag_bytes);
@@ -557,20 +546,7 @@ Error SecureChannel::open(std::span<const std::uint8_t> frame,
                            "encrypted frame authentication failed");
     }
     plaintext.resize(static_cast<std::size_t>(written));
-
-    if (!rx_initialized_) {
-        rx_initialized_ = true;
-        rx_highest_ = sequence;
-        rx_bitmap_ = 1;
-    } else if (sequence > rx_highest_) {
-        const std::uint64_t shift = sequence - rx_highest_;
-        rx_bitmap_ = shift >= static_cast<std::uint64_t>(k_replay_window)
-            ? 1
-            : ((rx_bitmap_ << shift) | 1);
-        rx_highest_ = sequence;
-    } else {
-        rx_bitmap_ |= std::uint64_t{1} << (rx_highest_ - sequence);
-    }
+    replay_ = accepted;
     return {};
 }
 

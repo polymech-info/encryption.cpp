@@ -20,6 +20,8 @@
     "test:fuzz": "node tests/test-fuzz.mjs",
     "test:signal": "node tests/test-signal.mjs",
     "test:media": "node tests/test-media.mjs",
+    "test:host": "node tests/test-host.mjs",
+    "test:flow": "node tests/test-flow.mjs",
     "test:http": "node tests/test-http.mjs",
     "test:auth": "node tests/test-auth.mjs",
     "test:build": "npm run build:cpp && npm test"

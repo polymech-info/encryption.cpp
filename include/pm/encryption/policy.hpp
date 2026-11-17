@@ -7,10 +7,11 @@ namespace pm::encryption {
 /**
  * Session policies are selectable features.
  *
- * LiveSession is the low-level online policy: pinned Ed25519 identities, a
- * SIGMA-I handshake, and one XChaCha20-Poly1305 channel for that process.
- * Signal and MLS are higher session policies and stay disabled until their
- * backends are compiled in.
+ * LiveSession is the low-level online policy: pinned Ed25519 identities, the
+ * three-message handshake labeled sigma-i-v1, and one XChaCha20-Poly1305
+ * channel for that process. Identities travel in the clear. Signal is an
+ * optional session policy, on when PM_ENCRYPTION_LIBSIGNAL is compiled (the
+ * dev preset). MLS stays compiled out.
  */
 enum class PolicyId : std::uint8_t {
     LiveSession = 1,

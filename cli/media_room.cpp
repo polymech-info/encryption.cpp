@@ -1,9 +1,8 @@
 #include "commands.hpp"
 #include "support.hpp"
 
-#include "pm/encryption/audio.hpp"
+#include "pm/encryption/datagram.hpp"
 #include "pm/encryption/features.hpp"
-#include "pm/encryption/video.hpp"
 
 #include <iostream>
 #include <nlohmann/json.hpp>
@@ -60,7 +59,7 @@ bool frames_hide(const std::vector<pm::room::Envelope>& frames, std::string_view
 
 Error exchange_key(SignalEndpoint& sender, SignalEndpoint& receiver, pm::room::Broker& broker,
                    const Identity& sender_id, const pm::room::Id& room_id, std::string_view peer,
-                   TrackKey& local, TrackKey& remote) {
+                   FlowKey& local, FlowKey& remote) {
     std::vector<std::uint8_t> wrap;
     if (Error err = local.write_wrap(wrap))
         return err;
@@ -83,7 +82,7 @@ Error exchange_key(SignalEndpoint& sender, SignalEndpoint& receiver, pm::room::B
         wipe(opened);
         return err;
     }
-    remote = TrackKey::from_wrap(opened, err);
+    remote = FlowKey::from_wrap(opened, err);
     wipe(opened);
     return err;
 }
@@ -149,19 +148,22 @@ int run_media_room(LogSink& log) {
     if (!err)
         err = signal_alice.initiate("bob", fetched.empty() ? std::span<const std::uint8_t>{} : fetched.front().frame);
 
-    TrackKey audio_key = TrackKey::generate(MediaKind::Audio, 1, err);
-    TrackKey video_key = TrackKey::generate(MediaKind::Video, 1, err);
-    TrackKey bob_audio;
-    TrackKey bob_video;
+    const auto audio_id = bytes_of("audio");
+    const auto video_id = bytes_of("video");
+    const auto scope = bytes_of("pair");
+    FlowKey audio_key = FlowKey::generate(audio_id, scope, 1, err);
+    FlowKey video_key = FlowKey::generate(video_id, scope, 1, err);
+    FlowKey bob_audio;
+    FlowKey bob_video;
     if (!err)
         err = exchange_key(signal_alice, signal_bob, broker, alice_id, room_id, "bob", audio_key, bob_audio);
     if (!err)
         err = exchange_key(signal_alice, signal_bob, broker, alice_id, room_id, "bob", video_key, bob_video);
 
-    AudioSender audio_tx = AudioSender::adopt(std::move(audio_key), err);
-    AudioReceiver audio_rx = AudioReceiver::adopt(std::move(bob_audio), err);
-    VideoSender video_tx = VideoSender::adopt(std::move(video_key), err);
-    VideoReceiver video_rx = VideoReceiver::adopt(std::move(bob_video), err);
+    DatagramSender audio_tx = DatagramSender::adopt(std::move(audio_key), err);
+    DatagramReceiver audio_rx = DatagramReceiver::adopt(std::move(bob_audio), err);
+    DatagramSender video_tx = DatagramSender::adopt(std::move(video_key), err);
+    DatagramReceiver video_rx = DatagramReceiver::adopt(std::move(bob_video), err);
 
     const auto audio_one = bytes_of("audio-frame-one");
     const auto audio_gap = bytes_of("audio-frame-gap");
@@ -206,12 +208,12 @@ int run_media_room(LogSink& log) {
     const bool setup = !err;
     const std::string setup_error = err.message;
 
-    TrackKey next_gen = TrackKey::generate(MediaKind::Audio, 2, err);
-    AudioReceiver rotated = AudioReceiver::adopt(std::move(next_gen), err);
+    FlowKey next_gen = FlowKey::generate(audio_id, scope, 2, err);
+    DatagramReceiver rotated = DatagramReceiver::adopt(std::move(next_gen), err);
     Error old_gen = rotated.open(packet_one, opened, stamp, sequence);
 
-    TrackKey outsider_key = TrackKey::generate(MediaKind::Audio, 1, err);
-    AudioReceiver outsider = AudioReceiver::adopt(std::move(outsider_key), err);
+    FlowKey outsider_key = FlowKey::generate(audio_id, scope, 1, err);
+    DatagramReceiver outsider = DatagramReceiver::adopt(std::move(outsider_key), err);
     Error outsider_err = outsider.open(packet_one, opened, stamp, sequence);
 
     fetched.clear();
@@ -223,7 +225,7 @@ int run_media_room(LogSink& log) {
     const bool ok = setup && gap && video_ok && hidden && granted && files_rejected && paired_ok
         && fetched.size() == 3 && replay.code == ErrorCode::Replay
         && tamper.code == ErrorCode::AuthenticationFailed
-        && crossed.code == ErrorCode::InvalidFrame && crossed_back.code == ErrorCode::InvalidFrame
+        && crossed.code == ErrorCode::WrongSession && crossed_back.code == ErrorCode::WrongSession
         && old_gen.code == ErrorCode::WrongSession && outsider_err.code == ErrorCode::AuthenticationFailed
         && room.members.size() == 2;
     if (!ok && err)
@@ -245,8 +247,8 @@ int run_media_room(LogSink& log) {
                      {"outsider_code", error_code_name(outsider_err.code)},
                      {"setup_error", setup_error},
                      {"tamper_rejected", tamper.code == ErrorCode::AuthenticationFailed},
-                     {"kind_separated", crossed.code == ErrorCode::InvalidFrame
-                          && crossed_back.code == ErrorCode::InvalidFrame},
+                     {"flow_separated", crossed.code == ErrorCode::WrongSession
+                          && crossed_back.code == ErrorCode::WrongSession},
                      {"generation_separated", old_gen.code == ErrorCode::WrongSession},
                      {"outsider_rejected", outsider_err.code == ErrorCode::AuthenticationFailed},
                      {"files_grant_rejected", files_rejected},

@@ -23,7 +23,7 @@ check(room.json?.gap === true, 'a lost audio frame does not block the next one')
 check(room.json?.video_opened === true, 'the video frame opens on its own key');
 check(room.json?.replay_rejected === true, 'a repeated media sequence is rejected');
 check(room.json?.tamper_rejected === true, 'a modified media frame is rejected');
-check(room.json?.kind_separated === true, 'an audio frame does not open as video');
+check(room.json?.flow_separated === true, 'a frame from one flow does not open on another');
 check(room.json?.generation_separated === true, 'a new generation does not open the old frame');
 check(room.json?.outsider_rejected === true, 'a different media key cannot open the frame');
 check(room.json?.files_grant_rejected === true, 'file bytes are not a room grant');

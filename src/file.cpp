@@ -195,6 +195,12 @@ Error verify_manifest(const FileManifest& manifest, std::span<const RecipientSea
         return Error::make(ErrorCode::InvalidArgument, "file revision is invalid");
     if (manifest.chunk_hashes.size() > k_max_file_chunks)
         return Error::make(ErrorCode::InvalidArgument, "file has too many chunks");
+    if (seals.empty() || seals.size() > k_max_file_recipients)
+        return Error::make(ErrorCode::InvalidArgument, "recipient set size is invalid");
+    for (std::size_t i = 1; i < seals.size(); ++i) {
+        if (sodium_memcmp(seals[i - 1].recipient.data(), seals[i].recipient.data(), seals[i].recipient.size()) >= 0)
+            return Error::make(ErrorCode::InvalidArgument, "recipient seals are not strictly increasing");
+    }
     const std::uint64_t expected = manifest.size == 0
         ? 0
         : (manifest.size + manifest.chunk_size - 1) / manifest.chunk_size;

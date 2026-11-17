@@ -8,6 +8,7 @@
 
 #if PM_ENCRYPTION_LIVE_SESSION
 #include "pm/encryption/file.hpp"
+#include "pm/encryption/flow.hpp"
 #include "pm/encryption/handshake.hpp"
 
 #include <sodium.h>
@@ -174,6 +175,48 @@ int run_vectors() {
         return 1;
     }
 
+    g_counter = 0;
+    SecureEndpoint endpoint = SecureEndpoint::open(err);
+    FlowOptions datagram;
+    datagram.delivery = Delivery::Datagram;
+    datagram.id = bytes_of("d");
+    datagram.scope = bytes_of("s");
+    datagram.epoch = 1;
+    SecureFlow datagram_sender = endpoint.open_flow(datagram, err);
+    std::vector<std::uint8_t> datagram_packet;
+    std::vector<std::uint8_t> rekey_wrap;
+    std::vector<std::uint8_t> rekey_packet;
+    if (!err)
+        err = datagram_sender.seal(bytes_of("dg"), datagram_packet);
+    if (!err)
+        err = datagram_sender.rekey(rekey_wrap);
+    if (!err)
+        err = datagram_sender.seal(bytes_of("dg"), rekey_packet);
+    FlowOptions label_a;
+    label_a.id = {0x61, 0x00, 0x62};
+    label_a.scope = {0x63};
+    label_a.epoch = 1;
+    FlowOptions label_b;
+    label_b.id = {0x61};
+    label_b.scope = {0x62, 0x00, 0x63};
+    label_b.epoch = 1;
+    SecureFlow flow_a = endpoint.open_flow(label_a, err);
+    SecureFlow flow_b = endpoint.open_flow(label_b, err);
+    std::vector<std::uint8_t> datagram_label_a;
+    std::vector<std::uint8_t> datagram_label_b;
+    if (!err)
+        err = flow_a.seal(bytes_of("dg"), datagram_label_a);
+    if (!err)
+        err = flow_b.seal(bytes_of("dg"), datagram_label_b);
+    if (!rekey_wrap.empty())
+        sodium_memzero(rekey_wrap.data(), rekey_wrap.size());
+    if (err || datagram_packet.empty() || rekey_packet.empty() || datagram_label_a == datagram_label_b) {
+        std::cout << error_json(err ? err : Error::make(ErrorCode::AuthenticationFailed,
+                                                        "vector datagram did not separate labels")).dump()
+                  << "\n";
+        return 1;
+    }
+
     nlohmann::json chunks = nlohmann::json::array();
     for (const auto& chunk : offer.chunks)
         chunks.push_back(hex_of(chunk));
@@ -204,6 +247,12 @@ int run_vectors() {
                      {"file_plaintext", hex_of(file_plain)},
                      {"file_offer", hex_of(offer_blob)},
                      {"file_chunks", chunks},
+                     {"datagram_rng", "counter-from-0"},
+                     {"datagram_plaintext", hex_of(bytes_of("dg"))},
+                     {"datagram_packet", hex_of(datagram_packet)},
+                     {"datagram_rekey_packet", hex_of(rekey_packet)},
+                     {"datagram_label_a", hex_of(datagram_label_a)},
+                     {"datagram_label_b", hex_of(datagram_label_b)},
                      {"ratchet", false},
                      {"removal_revokes_ciphertext", false},
                  }

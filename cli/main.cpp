@@ -42,6 +42,10 @@ int main(int argc, char** argv) {
     signal_room->add_option("--text", signal_text, "Chat bytes. Not printed.");
     auto* media_room = app.add_subcommand(
         "media-room", "Audio and video frames on a signal room. The broker does not carry them.");
+    auto* media_host = app.add_subcommand(
+        "media-host", "In-package host: capture, loopback plane, and render");
+    auto* flow = app.add_subcommand(
+        "flow", "Datagram facade: chat bytes, binary, and encoded frames on one seal path");
     auto* roundtrip = app.add_subcommand("roundtrip", "Round-trip one in-memory payload");
     std::string roundtrip_text;
     roundtrip->add_option("--text", roundtrip_text)->required();
@@ -105,6 +109,10 @@ int main(int argc, char** argv) {
         return pm::encryption::cli::run_signal_room(signal_text, log);
     if (*media_room)
         return pm::encryption::cli::run_media_room(log);
+    if (*media_host)
+        return pm::encryption::cli::run_media_host(log);
+    if (*flow)
+        return pm::encryption::cli::run_flow(log);
     if (*vectors)
         return pm::encryption::cli::run_vectors();
     if (*fuzz)

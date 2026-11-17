@@ -28,10 +28,12 @@ not grow a second pairing or room parser.
    that the frame signature matches. It assigns the next sequence. It does
    not decrypt.
 4. A chat frame may name a file manifest. The file bytes stay in the file
-   path. `audio.cpp` and `video.cpp` seal encoded frames under a track key
-   that the signal session wraps once. The broker may carry that key wrap.
-   It does not carry the audio or video frames. Capture, codecs, and WebRTC
-   stay in the host.
+   path. A datagram flow seals opaque bytes under a flow key that the signal
+   session wraps once. The broker may carry that key wrap.
+   It does not carry the audio or video frames. `pm::host::Device` is the
+   test host in this package: it accepts encoded frames, publishes them on a
+   loopback plane, and renders them on the other device. A real microphone,
+   codec, or WebRTC socket is not part of that stand-in.
 
 `pm-encryption room-harness` runs that sequence with two paired devices and
 one outsider. `pm-encryption chat-harness` remains the direct loopback socket
@@ -43,12 +45,17 @@ Tailscale is WireGuard between nodes that a tailnet admin has approved. It
 authenticates a node on that tailnet. It does not authenticate a Tanit user,
 and it does not replace the pairing fingerprint.
 
-What it does change:
+What it does change, only while both devices are actually on the tailnet:
 
 - A stranger on a cafe LAN cannot rewrite a WireGuard packet between two
   tailnet nodes. That is the underlay. Pairing does not have to defend
   against that hop when the devices really are using Tailscale to reach each
   other.
+
+Tailscale is not the LAN. Two phones on the same Wi-Fi, a desktop and a phone
+on a home network, and any path where the tailnet is down still meet on a
+network that can read, rewrite, and substitute bytes. That path keeps the
+pinned `PMEH` / `PME2` channel. WireGuard does not cover it.
 
 What it does not change:
 

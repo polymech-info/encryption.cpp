@@ -1,6 +1,7 @@
 #include "commands.hpp"
 #include "support.hpp"
 
+#include "pm/encryption/device_key.hpp"
 #include "pm/encryption/features.hpp"
 #include "pm/encryption/file.hpp"
 
@@ -121,11 +122,63 @@ int run_group_file_scenario(LogSink& log) {
     const std::vector<std::uint8_t> plaintext = {
         'g', 'r', 'o', 'u', 'p', '\0', 'c', 'h', 'a', 't', '-', 'f', 'i', 'l', 'e', '!'};
     constexpr std::uint32_t k_chunk = 5;
-    const PublicKey recipients[] = {bob_file.public_key(), dave_file.public_key()};
+    constexpr std::uint64_t not_before = 1700000000;
+    constexpr std::uint64_t not_after = not_before + 3600;
+    constexpr std::uint64_t now = not_before + 60;
+    DeviceFileKey bob_stmt;
+    DeviceFileKey dave_stmt;
+    Error bob_issue = issue_device_file_key(bob_id, bob_file, 1, not_before, not_after, bob_stmt);
+    Error dave_issue = issue_device_file_key(dave_id, dave_file, 1, not_before, not_after, dave_stmt);
+    std::vector<std::uint8_t> statement_blob;
+    DeviceFileKey bob_decoded;
+    if (!bob_issue)
+        bob_issue = encode_device_file_key(bob_stmt, statement_blob);
+    if (!bob_issue)
+        bob_issue = decode_device_file_key(statement_blob, bob_decoded);
+    const IdentityPublic pins[] = {bob_id.public_key(), dave_id.public_key()};
+    const std::uint32_t versions[] = {1, 1};
+    const DeviceFileKey statements[] = {bob_decoded, dave_stmt};
+    std::vector<PublicKey> authorized;
+    Error auth = (bob_issue || dave_issue)
+        ? (bob_issue ? bob_issue : dave_issue)
+        : authorize_device_file_keys(pins, versions, statements, now, authorized);
+    const bool device_file_key = !auth && authorized.size() == 2 && authorized[0] == bob_file.public_key()
+        && authorized[1] == dave_file.public_key();
+    check(device_file_key, "a pinned device statement authorizes that device's file key", auth.message);
+
+    Identity eve = keyed(0xE5, err);
+    FileKey eve_file = file_keyed(0xE5, err);
+    DeviceFileKey eve_stmt;
+    Error eve_issue = issue_device_file_key(eve, eve_file, 1, not_before, not_after, eve_stmt);
+    const IdentityPublic bob_pin[] = {bob_id.public_key()};
+    const std::uint32_t version_one[] = {1};
+    const DeviceFileKey eve_only[] = {eve_stmt};
+    std::vector<PublicKey> stolen;
+    Error substituted = eve_issue
+        ? eve_issue
+        : authorize_device_file_keys(bob_pin, version_one, eve_only, now, stolen);
+    DeviceFileKey flipped = bob_stmt;
+    flipped.file_key[0] ^= 0x01;
+    const DeviceFileKey flipped_only[] = {flipped};
+    Error flipped_err = authorize_device_file_keys(bob_pin, version_one, flipped_only, now, stolen);
+    const bool substituted_rejected = substituted.code == ErrorCode::IdentityMismatch && stolen.empty()
+        && flipped_err.code == ErrorCode::BadSignature;
+    check(substituted_rejected, "a substituted file key is rejected", error_code_name(substituted.code));
+
+    Error expired = authorize_device_file_keys(pins, versions, statements, not_after, stolen);
+    Error early = authorize_device_file_keys(pins, versions, statements, not_before - 1, stolen);
+    const bool window_rejected = expired.code == ErrorCode::Stale && early.code == ErrorCode::Stale;
+    check(window_rejected, "a file key statement is refused outside its window", error_code_name(expired.code));
+
+    const std::uint32_t next_version[] = {2, 1};
+    Error old_version = authorize_device_file_keys(pins, next_version, statements, now, stolen);
+    const bool version_rejected = old_version.code == ErrorCode::IdentityMismatch;
+    check(version_rejected, "a file key statement for another version is rejected",
+          error_code_name(old_version.code));
 
     FileOffer offer;
-    err = create_file_offer(alice, alice_file, transfer, room, "note.bin", "application/octet-stream",
-                            plaintext, k_chunk, recipients, offer);
+    err = create_authorized_file_offer(alice, alice_file, transfer, room, "note.bin", "application/octet-stream",
+                                      plaintext, k_chunk, pins, versions, statements, now, offer);
     check(!err && offer.chunks.size() == 4, "one ciphertext, sealed to each recipient", err.message);
 
     std::vector<std::uint8_t> offer_blob;
@@ -196,10 +249,11 @@ int run_group_file_scenario(LogSink& log) {
           "an offline member opens the same chunks in reverse order", dave_err.message);
 
     FileOffer revised;
-    const PublicKey bob_only[] = {bob_file.public_key()};
-    Error revise_err = create_file_offer(alice, alice_file, transfer, room, "note.bin",
-                                         "application/octet-stream", plaintext, k_chunk, bob_only,
-                                         revised, 2);
+    const IdentityPublic bob_only_pin[] = {bob_id.public_key()};
+    const DeviceFileKey bob_only_stmt[] = {bob_decoded};
+    Error revise_err = create_authorized_file_offer(alice, alice_file, transfer, room, "note.bin",
+                                                   "application/octet-stream", plaintext, k_chunk, bob_only_pin,
+                                                   version_one, bob_only_stmt, now, revised, 2);
     Error dave_removed;
     auto dave_after = FileInbox::open(file_keyed(0xD4, dave_removed), revised.manifest, revised.seals,
                                       dave_removed);
@@ -215,8 +269,8 @@ int run_group_file_scenario(LogSink& log) {
     wipe_plain(dave_plain);
 
     FileOffer empty_offer;
-    err = create_file_offer(alice, alice_file, transfer, room, "empty.bin", "application/octet-stream",
-                            {}, k_chunk, recipients, empty_offer);
+    err = create_authorized_file_offer(alice, alice_file, transfer, room, "empty.bin", "application/octet-stream",
+                                      {}, k_chunk, pins, versions, statements, now, empty_offer);
     Error empty_err;
     auto empty_inbox = FileInbox::open(file_keyed(0xB2, empty_err), empty_offer.manifest, empty_offer.seals, empty_err);
     std::vector<std::uint8_t> empty_plain;
@@ -410,6 +464,10 @@ int run_group_file_scenario(LogSink& log) {
                      {"group_key", "per-recipient-seal"},
                      {"file_key", "separate-x25519"},
                      {"file_key_is_identity", false},
+                     {"device_file_key", device_file_key},
+                     {"substituted_file_key_rejected", substituted_rejected},
+                     {"file_key_window_rejected", window_rejected},
+                     {"file_key_version_rejected", version_rejected},
                      {"removal_revokes_old_ciphertext", false},
                      {"chunk_reseal", false},
                      {"staging_deleted", staging_deleted},

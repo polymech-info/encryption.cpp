@@ -12,14 +12,16 @@ Triple Ratchet, Sesame, or session persistence.
 The same-day pass below closed the items a test in this package can lock.
 SA-15, SA-16, and SA-17 stay open. The byte model for SA-15 is
 `docs/protocol-model.md`. The known answers are `tests/vectors/kat.v1.json`.
+That model records the channel, file, and datagram layouts and the handshake
+state machine. It does not close SA-15.
 
 This is an internal reading of our own code. It is not an independent audit.
 Trail of Bits runs a cryptographic assessment in five stages: scope and
 protocol model, specification review, implementation review, adversarial
 testing, then a written report and a re-test of the fixes. We have written
-the adversary and read the code against it, and `npm test` is a fixed set of
-cases. We have not written a separate specification, a machine-checked
-argument, a fuzzer, or a report by someone who did not write the code.
+the adversary, the byte model, and a fixed `npm test`. We have not written a
+machine-checked argument, a coverage-guided fuzzer, or a report by someone
+who did not write the code.
 
 The useful warning from that literature is composition. Threema and Bridgefy
 used respectable primitives, and in Bridgefy's case libsignal itself, and the
@@ -93,10 +95,11 @@ private "SIGMA-like" variant as the fix.
 
 ### SA-2 — One channel key decrypts every frame in the process.
 
-`from_authenticated_exchange` derives one transmit key and one receive key.
-There is no ratchet. Anyone who copies those 32-byte keys, or the process
-memory that holds them, reads the whole session, past and future, until the
-process exits.
+`from_authenticated_exchange` derives one transmit key and one receive key
+for that channel object. There is no ratchet and no rekey. Anyone who copies
+those 32-byte keys, or the memory that holds them, reads that direction,
+past and future, until the object is destroyed. There is no import that
+restores a key with a reset counter.
 
 That is an acceptable description of an online test channel. It is not
 Signal, and it is not a production chat transcript.
@@ -248,14 +251,30 @@ offer from fixed seeds. `tests/vectors/kat.v1.json` is that output.
 `npm test` fails if the bytes change. A second implementation can match the
 file without calling this encoder.
 
+### SA-18 — A recipient FileKey is not bound to a device identity.
+
+The manifest signature covers the recipient file public keys the sender
+was given. It does not prove that a file public key belongs to the Ed25519
+identity the sender intended.
+
+**Resolution:** `DeviceFileKey` is a statement outside the file envelope.
+The device signs its file public key, a version, and a time window.
+`authorize_device_file_keys` checks the pinned identity, the pinned version,
+the window, and the signature. `create_authorized_file_offer` is the path
+the group-file scenario uses. A substituted key, a time outside the window,
+and a different version are rejected. `create_file_offer` remains the
+envelope and still seals whatever public keys it is given. The window is the
+statement's window. Membership does not choose it.
+
 ### SA-15 — Nobody outside this codebase has reviewed the composition.
 
 Gate 9 in the README asks for a reviewer who did not write the protocol.
 This document does not satisfy that gate. `docs/protocol-model.md` is the
-piece that reviewer would check: pinned keys, the transcript, the role byte,
-the separate file key, and the explicit non-revocation. Verifpal or
-CryptoVerif has not been run. Nobody outside this codebase has reviewed the
-composition.
+piece that reviewer would check: the handshake state machine, the `crypto_kx`
+input to each HKDF, the `PME2` additional data, the file nonce, the role of
+`sender_file`, the device file-key statement, and the explicit non-revocation.
+Verifpal or CryptoVerif has not been run. Nobody outside this
+codebase has reviewed the composition.
 
 ### SA-16 — Only Windows has been built.
 
@@ -268,7 +287,9 @@ differ. No security claim extends to those targets yet.
 `pm::room::Broker` is an in-process relay with signature checks. It is the
 shape Android will host. It does not listen, and a Tailscale node is not a
 paired user. The details are in `docs/room-broker.md`. A broker that binds a
-port, a tailnet address, or a P2P path still needs its own review.
+port, a tailnet address, or a P2P path still needs its own review. Tailscale
+is also absent on an ordinary LAN, so the pinned `PMEH` / `PME2` channel stays
+in scope for that path. WireGuard does not cover it.
 
 `chat-harness` is the direct loopback pair. `room-harness` is the in-process
 relay. Neither one is a listening broker. Review a bound port on its own.

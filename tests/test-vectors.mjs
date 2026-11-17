@@ -29,6 +29,10 @@ check(typeof vectors.json?.transcript === 'string' && typeof vectors.json?.trans
   'transcript and its hash are present');
 check(typeof vectors.json?.frame === 'string' && Array.isArray(vectors.json?.file_chunks),
   'frame and file chunks are present');
+check(typeof vectors.json?.datagram_packet === 'string'
+  && typeof vectors.json?.datagram_rekey_packet === 'string'
+  && vectors.json.datagram_label_a !== vectors.json.datagram_label_b,
+  'datagram packets, rekey, and distinct labels are present');
 check(!vectors.stdout.includes('BEGIN PRIVATE'), 'vector output is the known-answer record');
 
 console.log(`\n${failed ? 'FAILED' : 'passed'}: ${failed} failure(s)`);

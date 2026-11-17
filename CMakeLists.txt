@@ -71,9 +71,11 @@ set(PM_ENCRYPTION_LIB_SOURCES
   src/identity.cpp
   src/policy.cpp
   src/file.cpp
-  src/media_frame.cpp
-  src/audio.cpp
-  src/video.cpp
+  src/device_key.cpp
+  src/replay.cpp
+  src/datagram.cpp
+  src/flow.cpp
+  src/host/device.cpp
   src/room/pairing.cpp
   src/room/broker.cpp)
 if(PM_ENCRYPTION_LIVE_SESSION)
@@ -156,6 +158,8 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     cli/fuzz.cpp
     cli/signal_room.cpp
     cli/media_room.cpp
+    cli/media_host.cpp
+    cli/flow_command.cpp
     cli/policy_command.cpp)
   if(PM_ENCRYPTION_LIVE_SESSION)
     list(APPEND PM_ENCRYPTION_CLI_SOURCES cli/handshake_checks.cpp)

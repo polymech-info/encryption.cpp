@@ -26,6 +26,10 @@ check(scenario.json?.scenario === 'group-file', 'scenario names itself');
 check(scenario.json?.group_key === 'per-recipient-seal', 'content key is sealed per recipient');
 check(scenario.json?.file_key === 'separate-x25519', 'file keys are separate from the signing identity');
 check(scenario.json?.file_key_is_identity === false, 'the signing identity is not the file key');
+check(scenario.json?.device_file_key === true, 'a device statement authorizes its file key');
+check(scenario.json?.substituted_file_key_rejected === true, 'a substituted file key is rejected');
+check(scenario.json?.file_key_window_rejected === true, 'a file key statement is refused outside its window');
+check(scenario.json?.file_key_version_rejected === true, 'another file key version is rejected');
 check(scenario.json?.removal_revokes_old_ciphertext === false,
   'removing a recipient does not revoke an older file');
 check(scenario.json?.chunk_reseal === false, 'a chunk index cannot be sealed twice');

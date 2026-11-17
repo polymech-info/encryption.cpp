@@ -23,7 +23,9 @@ struct FileOffer;
  * X25519 key used only to seal and open file content keys.
  *
  * This is not the Ed25519 signing identity. A signature compromise does not
- * open a file, and a file-key compromise does not sign a handshake.
+ * open a file, and a file-key compromise does not sign a handshake. A
+ * DeviceFileKey statement, signed by the device, is what binds this public
+ * key to that identity. The file envelope does not carry the statement.
  */
 class FileKey {
 public:
@@ -104,6 +106,8 @@ public:
     std::vector<std::vector<std::uint8_t>> plaintext;
 };
 
+// Seals to the public keys it is given. It does not check a device statement.
+// create_authorized_file_offer is the path that does.
 Error create_file_offer(const Identity& sender,
                         const FileKey& sender_file_key,
                         const FileId& transfer,

@@ -16,7 +16,7 @@ namespace pm::encryption {
  * One device's Signal session state.
  *
  * The ciphertext is produced by upstream libsignal: PQXDH for the first
- * message, then the Double Ratchet. This type does not implement either
+ * message, then the Triple Ratchet. This type does not implement either
  * protocol. The host serializes calls. History lives in the session state
  * held by the adapter, not in a single channel key.
  */
