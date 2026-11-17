@@ -34,6 +34,10 @@ public:
     static Identity generate(Error& err);
     static Identity from_seed(const Seed& seed, Error& err);
 
+    // A second object for one pairwise session. The caller's identity stays
+    // so it can keep signing room frames. Desktop and Android share this.
+    Identity duplicate(Error& err) const;
+
     const IdentityPublic& public_key() const noexcept { return public_; }
     bool valid() const noexcept { return valid_; }
 

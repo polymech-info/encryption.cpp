@@ -8,8 +8,10 @@ also links the libsignal text room and the datagram flow facade. The
 option default for libsignal stays off. MLS stays compiled out. None of this
 is production E2EE. What holds is `docs/security-assessment.md`. The target
 shape is `docs/design.md`. Linux and Android are not yet built.  
-**Next:** no new wire protocol. The pinned `PMEH` / `PME2` channel stays,
-because a LAN has no Tailscale. `pm-encryption flow` is the datagram byte API.
+**Next:** `pm-encryption chat --policy live|signal` is the pairwise text
+session. The same C++ is what a desktop process and an Android host call.
+The pinned `PMEH` / `PME2` channel stays, because a LAN has no Tailscale.
+`pm-encryption flow` is the datagram byte API.
 Lifecycle and authority stay host policy.
 `chat-harness` is the loopback
 pair. `room-harness` is the in-process broker. Tailscale does not replace

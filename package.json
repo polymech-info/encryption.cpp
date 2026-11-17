@@ -16,6 +16,7 @@
     "test:file": "node tests/test-file.mjs",
     "test:harness": "node tests/test-harness.mjs",
     "test:room": "node tests/test-room.mjs",
+    "test:chat": "node tests/test-chat.mjs",
     "test:vectors": "node tests/test-vectors.mjs",
     "test:fuzz": "node tests/test-fuzz.mjs",
     "test:signal": "node tests/test-signal.mjs",

@@ -41,6 +41,7 @@ int run_capabilities() {
                      {"file_key", "separate-x25519"},
                      {"file_key_is_identity", false},
                      {"device_file_key", "signed-statement-v1"},
+                     {"text_session", "pairwise-v1"},
                      {"removal_revokes_ciphertext", false},
                      {"libsignal", feature_libsignal},
                      {"openmls", feature_openmls},

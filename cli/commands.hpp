@@ -14,6 +14,7 @@ int run_identity(const std::string& seed_hex);
 int run_roundtrip(const std::string& text);
 int run_policy(const std::string& name, LogSink& log);
 int run_chat_harness(const std::string& host, const std::string& text, LogSink& log);
+int run_chat(const std::string& policy, const std::string& text, LogSink& log);
 int run_room_harness(const std::string& text, LogSink& log);
 int run_signal_room(const std::string& text, LogSink& log);
 int run_media_room(LogSink& log);

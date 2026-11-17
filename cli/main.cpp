@@ -24,6 +24,12 @@ int main(int argc, char** argv) {
     auto* identity = app.add_subcommand("identity", "Print the public key for an identity seed");
     std::string identity_seed;
     identity->add_option("--seed", identity_seed, "64 hex characters")->required();
+    auto* chat = app.add_subcommand(
+        "chat", "Pairwise text session selected by policy. The host moves the bytes.");
+    std::string chat_policy = "live";
+    std::string chat_text = "hello";
+    chat->add_option("--policy", chat_policy, "live, signal, unauthenticated-kx, or mls")->required();
+    chat->add_option("--text", chat_text, "Chat bytes. Not printed.");
     auto* chat_harness = app.add_subcommand(
         "chat-harness", "Loopback desktop chat between two pinned endpoints");
     std::string harness_host = "127.0.0.1";
@@ -101,6 +107,8 @@ int main(int argc, char** argv) {
         return pm::encryption::cli::run_scenario(scenario_name, log);
     if (*identity)
         return pm::encryption::cli::run_identity(identity_seed);
+    if (*chat)
+        return pm::encryption::cli::run_chat(chat_policy, chat_text, log);
     if (*chat_harness)
         return pm::encryption::cli::run_chat_harness(harness_host, harness_text, log);
     if (*room_harness)

@@ -77,6 +77,19 @@ Identity Identity::from_seed(const Seed& seed, Error& err) {
     return out;
 }
 
+Identity Identity::duplicate(Error& err) const {
+    err = {};
+    Identity out;
+    if (!valid_) {
+        err = Error::make(ErrorCode::InvalidArgument, "identity is invalid");
+        return out;
+    }
+    out.public_ = public_;
+    out.secret_ = secret_;
+    out.valid_ = true;
+    return out;
+}
+
 Error Identity::sign(std::span<const std::uint8_t> message, Signature& signature) const {
     signature.fill(0);
     if (!valid_)

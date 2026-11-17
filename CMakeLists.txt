@@ -77,7 +77,9 @@ set(PM_ENCRYPTION_LIB_SOURCES
   src/flow.cpp
   src/host/device.cpp
   src/room/pairing.cpp
-  src/room/broker.cpp)
+  src/room/broker.cpp
+  src/text_session.cpp
+  src/room/text_room.cpp)
 if(PM_ENCRYPTION_LIVE_SESSION)
   list(APPEND PM_ENCRYPTION_LIB_SOURCES src/handshake.cpp)
 endif()
@@ -153,6 +155,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     cli/file_scenario.cpp
     cli/http_command.cpp
     cli/chat_harness.cpp
+    cli/chat_command.cpp
     cli/room_harness.cpp
     cli/vectors.cpp
     cli/fuzz.cpp

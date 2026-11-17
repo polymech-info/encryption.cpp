@@ -8,7 +8,8 @@
 #include <nlohmann/json.hpp>
 
 #if PM_ENCRYPTION_LIVE_SESSION
-#include "pm/encryption/handshake.hpp"
+#include "pm/encryption/policy.hpp"
+#include "pm/encryption/text_session.hpp"
 
 #include <sodium.h>
 
@@ -136,12 +137,14 @@ int run_room_harness(const std::string& text, LogSink& log) {
     const bool invite_reused = !err && broker.join(bob, invite, second).code == ErrorCode::Replay;
 
     constexpr std::string_view k_context = "tanit-room|loopback-v1";
-    auto alice_channel_id = keyed(0xA1, err);
-    auto bob_channel_id = keyed(0xB2, err);
-    auto alice_hs = Handshake::initiator(std::move(alice_channel_id), bob.public_key(),
-                                         std::string(k_context), err);
-    auto bob_hs = Handshake::responder(std::move(bob_channel_id), alice.public_key(),
-                                       std::string(k_context), err);
+    TextSession alice_tx;
+    TextSession bob_tx;
+    if (!err)
+        err = TextSession::open(PolicyId::LiveSession, EndpointRole::Initiator, alice, bob.public_key(),
+                                std::string(k_context), {}, {}, alice_tx);
+    if (!err)
+        err = TextSession::open(PolicyId::LiveSession, EndpointRole::Responder, bob, alice.public_key(),
+                                std::string(k_context), {}, {}, bob_tx);
 
     auto post = [&](Identity& sender, std::span<const std::uint8_t> bytes, pm::room::Envelope& out) {
         return broker.post(sender, room_id, bytes, out);
@@ -159,8 +162,6 @@ int run_room_harness(const std::string& text, LogSink& log) {
         return Error::make(ErrorCode::UnexpectedState, "peer frame was not relayed");
     };
 
-    Identity alice_post = keyed(0xA1, err);
-    Identity bob_post = keyed(0xB2, err);
     std::vector<std::uint8_t> message;
     std::vector<std::uint8_t> incoming;
     pm::room::Envelope envelope;
@@ -168,56 +169,39 @@ int run_room_harness(const std::string& text, LogSink& log) {
     bool plaintext_hidden = true;
     bool tamper_rejected = false;
     bool manifest_hidden = false;
-    if (!err)
-        err = alice_hs.write_message(message);
-    if (!err)
-        err = post(alice_post, message, envelope);
-    if (!err)
-        err = take_peer(alice.public_key(), 0, incoming);
-    if (!err)
-        err = bob_hs.read_message(incoming);
-    if (!err)
-        err = bob_hs.write_message(message);
-    if (!err)
-        err = post(bob_post, message, envelope);
-    if (!err)
-        err = take_peer(bob.public_key(), 1, incoming);
-    if (!err)
-        err = alice_hs.read_message(incoming);
-    if (!err)
-        err = alice_hs.write_message(message);
-    if (!err)
-        err = post(alice_post, message, envelope);
-    if (!err)
-        err = take_peer(alice.public_key(), 2, incoming);
-    if (!err)
-        err = bob_hs.read_message(incoming);
-    SecureChannel alice_session;
-    SecureChannel bob_session;
-    if (!err && alice_hs.complete() && bob_hs.complete()) {
-        alice_session = alice_hs.take_channel(err);
+    auto exchange = [&](TextSession& from, Identity& from_id, const IdentityPublic& from_pub, TextSession& to,
+                        std::uint64_t after) {
+        if (err)
+            return;
+        err = from.pull(message);
         if (!err)
-            bob_session = bob_hs.take_channel(err);
-    }
+            err = post(from_id, message, envelope);
+        if (!err)
+            err = take_peer(from_pub, after, incoming);
+        if (!err)
+            err = to.push(incoming);
+    };
+    exchange(alice_tx, alice, alice.public_key(), bob_tx, 0);
+    exchange(bob_tx, bob, bob.public_key(), alice_tx, 1);
+    exchange(alice_tx, alice, alice.public_key(), bob_tx, 2);
     std::vector<std::uint8_t> frame;
-    if (!err && alice_session.valid())
-        err = alice_session.seal({reinterpret_cast<const std::uint8_t*>(text.data()), text.size()},
-                                 "text/plain", frame, pm::room::k_max_room_frame);
+    if (!err && alice_tx.can_seal())
+        err = alice_tx.seal({reinterpret_cast<const std::uint8_t*>(text.data()), text.size()}, frame);
     pm::room::Envelope chat;
     if (!err)
-        err = post(alice_post, frame, chat);
+        err = post(alice, frame, chat);
     if (!err && contains_text(chat.frame, text))
         plaintext_hidden = false;
     std::vector<std::uint8_t> tampered = chat.frame;
     if (!tampered.empty())
         tampered.back() ^= 0x01;
     std::vector<std::uint8_t> opened;
-    if (!err && bob_session.valid()) {
+    if (!err && bob_tx.can_open()) {
         err = take_peer(alice.public_key(), 3, incoming);
         if (!err) {
-            Error tamper = bob_session.open(tampered, "text/plain", opened, pm::room::k_max_room_frame);
+            Error tamper = bob_tx.open_text(tampered, opened);
             tamper_rejected = tamper.code == ErrorCode::AuthenticationFailed;
-            err = bob_session.open(incoming, "text/plain", opened, pm::room::k_max_room_frame);
+            err = bob_tx.open_text(incoming, opened);
         }
     }
     relayed_chat = !err && opened.size() == text.size()
@@ -226,17 +210,16 @@ int run_room_harness(const std::string& text, LogSink& log) {
     const std::string manifest = "manifest:room-file-1";
     std::vector<std::uint8_t> manifest_frame;
     if (relayed_chat)
-        err = alice_session.seal({reinterpret_cast<const std::uint8_t*>(manifest.data()), manifest.size()},
-                                 "text/plain", manifest_frame, pm::room::k_max_room_frame);
+        err = alice_tx.seal({reinterpret_cast<const std::uint8_t*>(manifest.data()), manifest.size()},
+                            manifest_frame);
     pm::room::Envelope manifest_envelope;
     if (relayed_chat && !err)
-        err = post(alice_post, manifest_frame, manifest_envelope);
+        err = post(alice, manifest_frame, manifest_envelope);
     if (relayed_chat && !err)
         manifest_hidden = !contains_text(manifest_envelope.frame, manifest);
 
     pm::room::Envelope carol_envelope;
-    Identity carol_post = keyed(0xC3, err);
-    const bool outsider_rejected = broker.post(carol_post, room_id, frame, carol_envelope).code
+    const bool outsider_rejected = broker.post(carol, room_id, frame, carol_envelope).code
         == ErrorCode::NotRecipient;
 
     const bool grants_chat_only = paired.trust == pm::room::Trust::Paired && paired.grants == pm::room::k_grant_chat

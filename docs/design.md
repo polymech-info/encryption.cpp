@@ -298,6 +298,8 @@ Replacing `PMEH` with Noise or TLS is an evaluation, not a rename. The pinned id
 
 WebRTC already encrypts media with SRTP and data channels with DTLS. This tree does not add a second media cipher. SFrame is in scope only if an untrusted forwarder must be unable to read the media. File bytes on untrusted storage stay on `FileOffer`. Ordinary VFS copies can ride the LAN channel. libsignal stays optional and isolated. MLS stays compiled out.
 
+`TextSession` is the chat call a desktop process and an Android host share. The host passes `live_session` or `signal` and moves the bytes. There is no socket in the type. `TextRoom` holds one `TextSession` per peer and prefixes each frame with the recipient identity so the other members can ignore it. That prefix is not a group key. A room grant still does not create one. `unauthenticated_kx` and `mls` are refused.
+
 `SecureEndpoint::open_flow` opens datagrams. Channels and files keep their own calls. The broker stays a membership log. It does not become part of the cipher.
 
 Still open inside the types that exist: persistence, per-member grants, and a binding from an Ed25519 member to a signal address. A passing harness does not close them. Windows, Linux, and Android are still unproven together. The CLI entries for a later manual pass are `chat-harness`, `flow`, `signal-room`, and `media-host`.
